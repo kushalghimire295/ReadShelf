@@ -167,6 +167,9 @@ function App() {
   // The document whose sharing is being confirmed in the dialog.
   const [pending, setPending] = useState<Item | null>(null)
   const [switching, setSwitching] = useState(false)
+  // The document being removed after confirmation in My Adds.
+  const [deleting, setDeleting] = useState<Item | null>(null)
+  const [removing, setRemoving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
@@ -256,11 +259,12 @@ function App() {
   }, [loadFeed, loadPopular, loadShelf])
 
   useEffect(() => {
-    if (!reader && !pending) return
+    if (!reader && !pending && !deleting) return
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setReader(null)
         setPending(null)
+        setDeleting(null)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -269,7 +273,7 @@ function App() {
       window.removeEventListener('keydown', onKey)
       document.body.style.overflow = ''
     }
-  }, [reader, pending])
+  }, [reader, pending, deleting])
 
   async function upload(event: React.FormEvent) {
     event.preventDefault()
@@ -350,6 +354,29 @@ function App() {
           ? 'Now private — only you can open it.'
           : 'Now public — it appears in other readers’ Home feeds.',
       )
+  }
+
+  async function remove(item: Item) {
+    setError('')
+    setNotice('')
+    try {
+      await request(`/api/items/${item.id}`, { method: 'DELETE' })
+      setShelf((current) => current.filter((entry) => entry.id !== item.id))
+      setFeed((current) => current.filter((entry) => entry.id !== item.id))
+      setPopular((current) => current.filter((entry) => entry.id !== item.id))
+      if (reader?.id === item.id) setReader(null)
+      setNotice('Deleted from your shelf.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not delete that read.')
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleting) return
+    setRemoving(true)
+    await remove(deleting)
+    setRemoving(false)
+    setDeleting(null)
   }
 
   /** Keep every list in step with a freshly counted item. */
@@ -697,6 +724,28 @@ function App() {
                       >
                         {item.visibility === 'private' ? 'Private' : 'Public'}
                       </button>
+                      <button
+                        type="button"
+                        className="add-delete"
+                        aria-label={`Delete ${item.title}`}
+                        title="Delete"
+                        onClick={() => setDeleting(item)}
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={1.7}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M4.5 7h15" />
+                          <path d="M9.5 7V4.9h5V7" />
+                          <path d="M6.6 7l.8 12.1h9.2L17.4 7" />
+                          <path d="M10.4 10.8v5M13.6 10.8v5" />
+                        </svg>
+                      </button>
                     </div>
                   </li>
                 ))}
@@ -895,6 +944,41 @@ function App() {
                   : pending.visibility === 'public'
                     ? 'Make private'
                     : 'Make public'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleting && (
+        <div
+          className="modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-title"
+        >
+          <div className="modal-card">
+            <h2 id="delete-title">Delete this read?</h2>
+            <p className="modal-text">
+              <strong>{deleting.title}</strong> will be removed from your shelf,
+              Home and Most opened. This cannot be undone.
+            </p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="quiet small"
+                onClick={() => setDeleting(null)}
+                disabled={removing}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="small danger-fill"
+                onClick={() => void confirmDelete()}
+                disabled={removing}
+              >
+                {removing ? 'Deleting…' : 'Delete'}
               </button>
             </div>
           </div>
