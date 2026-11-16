@@ -135,6 +135,28 @@ main {
   font-weight: 700;
   letter-spacing: -0.04em;
 }
+/* The logo doubles as a reload control. */
+.brand {
+  margin: 0;
+  padding: 2px 2px 2px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.15s ease;
+}
+.brand:hover {
+  opacity: 0.78;
+}
+.brand:active .mark {
+  transform: translate(1px, 1px);
+  box-shadow: 2px 2px 0 var(--accent-soft);
+}
 .mark {
   width: 21px;
   height: 16px;

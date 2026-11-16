@@ -411,10 +411,16 @@ function App() {
   return (
     <main>
       <header className="topbar">
-        <span className="wordmark">
+        <button
+          type="button"
+          className="wordmark brand"
+          aria-label="Reload Readshelf"
+          title="Reload Readshelf"
+          onClick={() => window.location.reload()}
+        >
           <span className="mark" aria-hidden="true" />
           Readshelf
-        </span>
+        </button>
         <nav aria-label="Sections" className="tabs">
           {NAV_ITEMS.map(({ key, label }) => (
             <button
