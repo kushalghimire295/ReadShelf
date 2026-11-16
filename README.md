@@ -10,7 +10,10 @@ shelf; anything they mark public is shown to other readers on the Home feed.
   and only readers allowed to open an item can increment it.
 - **Public** — appears on every other reader's Home feed, newest first. There
   is no percentage or sampling: public means listed.
-- Files live in R2 (`FILES`); titles and sharing live in D1 (`DB`).
+- **Covers** — a separate cover image can be uploaded with a document, and
+  that image is used on every card and row instead of the document preview.
+- Files live in R2 (`FILES`); titles, sharing and cover references live in D1
+  (`DB`).
 
 ## Start and check
 
@@ -46,15 +49,17 @@ it — locally the app simply opens as a signed-in reader named “Reader”.
 | `GET /api/session` | current user, auth mode, database + storage readiness |
 | `GET /api/feed` | public items from other readers, newest first |
 | `GET /api/items` | your own shelf (private and public) |
-| `POST /api/items` | multipart upload: `file`, `title`, `visibility` |
+| `POST /api/items` | multipart upload: `file`, optional `cover`, `title`, `visibility` |
 | `PATCH /api/items/:id` | rename or change visibility |
 | `DELETE /api/items/:id` | remove the row and the stored object |
 | `GET /api/items/:id/file` | inline PDF/image stream, authorised per request |
+| `GET /api/items/:id/cover` | the uploader's cover image, same access rules |
 | `POST /api/items/:id/open` | record one open and return the new total |
 | `GET /api/popular` | all-time ranking of public reads by opens |
 
-Uploads accept PDF, JPEG, PNG, WebP, GIF and AVIF up to 15 MB. Titles are
-1–120 characters. All queries bind parameters and scope ownership by the
+Uploads accept PDF, JPEG, PNG, WebP, GIF and AVIF up to 15 MB. A cover must be
+an image (JPEG, PNG, WebP, GIF or AVIF) of up to 5 MB. Titles are 1–120
+characters. All queries bind parameters and scope ownership by the
 authenticated user's `sub`; mutations reject foreign origins.
 
 ## Publish with Freebuff
@@ -73,6 +78,7 @@ application secret or separate cloud account is needed.
 `bun test` runs against real local D1 and R2 through Miniflare: upload bytes
 round-trip, private items stay owner-only (including the file route), public
 items surface in other feeds, sharing changes take effect, opens are counted and
-ranked while private items stay out of the ranking, deletion removes the row, and
-signed-out/foreign-origin/oversized requests are refused. After provisioning, verify real sign-in, refresh, sign-out
+ranked while private items stay out of the ranking, covers are stored, served and
+access-checked, deletion removes the row, and signed-out/foreign-origin/oversized
+requests are refused. After provisioning, verify real sign-in, refresh, sign-out
 and two accounts' isolation in a browser.

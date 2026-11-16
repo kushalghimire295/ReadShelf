@@ -13,9 +13,10 @@ type AppContext = {
 type Authenticate = (request: Request, env: Env) => Promise<FreebuffUser | null>
 
 const MAX_UPLOAD = 15 * 1024 * 1024
+const MAX_COVER = 5 * 1024 * 1024
 const MAX_TITLE = 120
 const COLUMNS =
-  'id, owner_sub, owner_name, title, kind, mime, size, object_key, visibility, reach, opens, created_at, updated_at'
+  'id, owner_sub, owner_name, title, kind, mime, size, object_key, cover_key, cover_mime, visibility, reach, opens, created_at, updated_at'
 
 const TYPES: Record<string, { kind: ItemKind; ext: string }> = {
   'application/pdf': { kind: 'pdf', ext: 'pdf' },
@@ -24,6 +25,15 @@ const TYPES: Record<string, { kind: ItemKind; ext: string }> = {
   'image/webp': { kind: 'image', ext: 'webp' },
   'image/gif': { kind: 'image', ext: 'gif' },
   'image/avif': { kind: 'image', ext: 'avif' },
+}
+
+/** A cover is always an image, never the document itself. */
+const COVER_TYPES: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/avif': 'avif',
 }
 
 function cleanTitle(value: unknown): string | null {
@@ -154,8 +164,9 @@ export function createApp(authenticate: Authenticate = currentUser) {
   app.post(
     '/api/items',
     bodyLimit({
-      maxSize: MAX_UPLOAD + 256 * 1024,
-      onError: (c) => c.json({ error: 'Files can be at most 15 MB.' }, 413),
+      maxSize: MAX_UPLOAD + MAX_COVER + 512 * 1024,
+      onError: (c) =>
+        c.json({ error: 'Files can be at most 15 MB and covers 5 MB.' }, 413),
     }),
     async (c) => {
       const bucket = c.env.FILES
@@ -188,9 +199,30 @@ export function createApp(authenticate: Authenticate = currentUser) {
 
       const visibility = form.visibility === 'private' ? 'private' : 'public'
 
+      // The cover is optional; a separate image the uploader picks so the read
+      // is recognisable wherever it appears.
+      const cover = form.cover
+      let coverMime: string | null = null
+      let coverBytes: ArrayBuffer | null = null
+      if (cover !== undefined && cover !== null && cover !== '') {
+        if (!(cover instanceof File) || !cover.size)
+          return c.json({ error: 'That cover image is empty.' }, 400)
+        const coverType = cover.type.split(';')[0]!.trim().toLowerCase()
+        if (!COVER_TYPES[coverType])
+          return c.json(
+            { error: 'A cover must be a JPEG, PNG, WebP, GIF or AVIF image.' },
+            415,
+          )
+        if (cover.size > MAX_COVER)
+          return c.json({ error: 'Covers can be at most 5 MB.' }, 413)
+        coverMime = coverType
+        coverBytes = await cover.arrayBuffer()
+      }
+
       const user = c.get('user')
       const id = crypto.randomUUID()
       const key = `items/${user.sub}/${id}`
+      const coverKey = coverMime ? `${key}-cover` : null
       const now = Date.now()
       const item: ItemRow = {
         id,
@@ -201,6 +233,8 @@ export function createApp(authenticate: Authenticate = currentUser) {
         mime,
         size: file.size,
         object_key: key,
+        cover_key: coverKey,
+        cover_mime: coverMime,
         visibility,
         // `reach` predates plain public sharing; the column is kept at 0.
         reach: 0,
@@ -212,12 +246,16 @@ export function createApp(authenticate: Authenticate = currentUser) {
       await bucket.put(key, await file.arrayBuffer(), {
         httpMetadata: { contentType: mime },
       })
+      if (coverKey && coverBytes && coverMime)
+        await bucket.put(coverKey, coverBytes, {
+          httpMetadata: { contentType: coverMime },
+        })
       try {
         await c
           .get('db')
           .prepare(
-            `INSERT INTO items (id, owner_sub, owner_name, title, kind, mime, size, object_key, visibility, reach, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO items (id, owner_sub, owner_name, title, kind, mime, size, object_key, cover_key, cover_mime, visibility, reach, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .bind(
             item.id,
@@ -228,6 +266,8 @@ export function createApp(authenticate: Authenticate = currentUser) {
             item.mime,
             item.size,
             item.object_key,
+            item.cover_key,
+            item.cover_mime,
             item.visibility,
             item.reach,
             item.created_at,
@@ -235,7 +275,9 @@ export function createApp(authenticate: Authenticate = currentUser) {
           )
           .run()
       } catch (error) {
-        await bucket.delete(key).catch(() => undefined)
+        await bucket
+          .delete([key, ...(coverKey ? [coverKey] : [])])
+          .catch(() => undefined)
         throw error
       }
       return c.json({ item: mapItem(item, user.sub) }, 201)
@@ -276,14 +318,18 @@ export function createApp(authenticate: Authenticate = currentUser) {
     const db = c.get('db')
     const removed = await db
       .prepare(
-        'DELETE FROM items WHERE id = ? AND owner_sub = ? RETURNING object_key',
+        'DELETE FROM items WHERE id = ? AND owner_sub = ? RETURNING object_key, cover_key',
       )
       .bind(c.req.param('id'), c.get('user').sub)
-      .first<{ object_key: string }>()
+      .first<{ object_key: string; cover_key: string | null }>()
     if (!removed) return c.json({ error: 'Item not found.' }, 404)
     // The row is the source of truth; a missing object is not an error.
-    if (c.env.FILES)
-      await c.env.FILES.delete(removed.object_key).catch(() => undefined)
+    if (c.env.FILES) {
+      const keys = [removed.object_key, removed.cover_key].filter(
+        (key): key is string => Boolean(key),
+      )
+      await c.env.FILES.delete(keys).catch(() => undefined)
+    }
     return c.json({ ok: true })
   })
 
@@ -333,6 +379,40 @@ export function createApp(authenticate: Authenticate = currentUser) {
         'Content-Type': row.mime,
         'Content-Length': String(bytes.byteLength),
         'Content-Disposition': `inline; filename="${fileName(row.title, TYPES[row.mime]?.ext ?? 'bin')}"`,
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control':
+          row.visibility === 'public' ? 'private, max-age=300' : 'private, no-store',
+        ETag: object.httpEtag,
+      },
+    })
+  })
+
+  // Covers are read by every card and row, so they follow the same access
+  // rules as the document itself.
+  app.get('/api/items/:id/cover', async (c) => {
+    const bucket = c.env.FILES
+    if (!bucket)
+      return c.json(
+        { error: 'Uploads are still being set up. Please try again later.' },
+        503,
+      )
+    const viewer = c.get('user').sub
+    const row = await c
+      .get('db')
+      .prepare(`SELECT ${COLUMNS} FROM items WHERE id = ?`)
+      .bind(c.req.param('id'))
+      .first<ItemRow>()
+    if (!row || (row.visibility !== 'public' && row.owner_sub !== viewer))
+      return c.json({ error: 'Item not found.' }, 404)
+    if (!row.cover_key) return c.json({ error: 'This read has no cover.' }, 404)
+    const object = await bucket.get(row.cover_key)
+    if (!object) return c.json({ error: 'This cover is unavailable.' }, 404)
+
+    const bytes = await object.arrayBuffer()
+    return new Response(bytes, {
+      headers: {
+        'Content-Type': row.cover_mime || 'image/jpeg',
+        'Content-Length': String(bytes.byteLength),
         'X-Content-Type-Options': 'nosniff',
         'Cache-Control':
           row.visibility === 'public' ? 'private, max-age=300' : 'private, no-store',

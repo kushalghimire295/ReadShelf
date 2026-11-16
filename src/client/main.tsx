@@ -14,6 +14,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 const fileUrl = (item: Item) => `/api/items/${item.id}/file`
+// Versioned so a replaced cover is not served from the browser cache.
+const coverUrl = (item: Item) => `/api/items/${item.id}/cover?v=${item.updatedAt}`
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -123,7 +125,15 @@ function NavIcon({ name }: { name: View }) {
 function Thumb({ item, big = false }: { item: Item; big?: boolean }) {
   return (
     <div className={`thumb ${item.kind}${big ? ' big' : ''}`}>
-      {item.kind === 'image' ? (
+      {item.hasCover ? (
+        <img
+          className="item-cover"
+          src={coverUrl(item)}
+          alt=""
+          loading="lazy"
+          decoding="async"
+        />
+      ) : item.kind === 'image' ? (
         <img src={fileUrl(item)} alt="" loading="lazy" decoding="async" />
       ) : (
         <>
@@ -150,6 +160,8 @@ function App() {
   const [notice, setNotice] = useState('')
 
   const [file, setFile] = useState<File | null>(null)
+  const [cover, setCover] = useState<File | null>(null)
+  const [coverPreview, setCoverPreview] = useState('')
   const [title, setTitle] = useState('')
   const [visibility, setVisibility] = useState<Visibility>('private')
   const [uploading, setUploading] = useState(false)
@@ -160,6 +172,16 @@ function App() {
   const enabled = Boolean(
     loaded && session?.user && session.database && session.storage,
   )
+
+  useEffect(() => {
+    if (!cover) {
+      setCoverPreview('')
+      return
+    }
+    const url = URL.createObjectURL(cover)
+    setCoverPreview(url)
+    return () => URL.revokeObjectURL(url)
+  }, [cover])
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -248,6 +270,7 @@ function App() {
     try {
       const form = new FormData()
       form.append('file', file)
+      if (cover) form.append('cover', cover)
       if (title.trim()) form.append('title', title.trim())
       form.append('visibility', visibility)
       const result = await request<{ item: Item }>('/api/items', {
@@ -256,6 +279,7 @@ function App() {
       })
       setShelf((current) => [result.item, ...current])
       setFile(null)
+      setCover(null)
       setTitle('')
       setView('shelf')
       setNotice(
@@ -708,6 +732,46 @@ function App() {
               )}
             </label>
 
+            <div className="field">
+              <span>Cover image</span>
+              <div className={`cover-pick${coverPreview ? ' has-cover' : ''}`}>
+                <span className="cover-thumb" aria-hidden="true">
+                  {coverPreview ? (
+                    <img src={coverPreview} alt="" />
+                  ) : (
+                    <span className="cover-blank">▤</span>
+                  )}
+                </span>
+                <span className="cover-body">
+                  <label className="button small cover-button">
+                    {cover ? 'Change cover' : 'Add a cover'}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif,image/avif"
+                      disabled={!enabled || uploading}
+                      onChange={(e) =>
+                        setCover(e.target.files?.[0] ?? null)
+                      }
+                    />
+                  </label>
+                  {cover ? (
+                    <button
+                      type="button"
+                      className="quiet small"
+                      onClick={() => setCover(null)}
+                      disabled={uploading}
+                    >
+                      Remove
+                    </button>
+                  ) : (
+                    <span className="cover-hint">
+                      Optional · otherwise the document itself is shown
+                    </span>
+                  )}
+                </span>
+              </div>
+            </div>
+
             <label className="field">
               <span>Title</span>
               <input
@@ -763,6 +827,7 @@ function App() {
                 className="quiet small"
                 onClick={() => {
                   setFile(null)
+                  setCover(null)
                   setTitle('')
                   setVisibility('private')
                 }}

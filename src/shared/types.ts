@@ -9,6 +9,8 @@ export type Item = {
   ownerName: string
   isOwner: boolean
   size: number
+  /** True when the uploader supplied their own cover image. */
+  hasCover: boolean
   /** Times this document has been opened, all time. */
   opens: number
   createdAt: number

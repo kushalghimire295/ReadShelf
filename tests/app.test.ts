@@ -79,6 +79,7 @@ type Upload = {
   name?: string
   user?: string
   origin?: string
+  cover?: { mime: string; bytes?: number[] }
 }
 
 function upload({
@@ -89,9 +90,20 @@ function upload({
   name = 'notes.pdf',
   user = 'alice',
   origin = env.APP_ORIGIN!,
+  cover,
 }: Upload = {}) {
   const form = new FormData()
   form.append('file', new File([new Uint8Array(bytes)], name, { type: mime }))
+  if (cover)
+    form.append(
+      'cover',
+      // Bun re-derives a part's type from its filename, so match the extension.
+      new File(
+        [new Uint8Array(cover.bytes ?? [1, 2, 3])],
+        `cover.${cover.mime.split('/')[1] ?? 'png'}`,
+        { type: cover.mime },
+      ),
+    )
   form.append('title', title)
   form.append('visibility', visibility)
   return app.request(
@@ -311,6 +323,50 @@ test('opens are counted per permitted reader and ranked, private items excluded'
   expect(shelf.items.find((entry) => entry.title === 'Secret notes')?.opens).toBe(
     1,
   )
+})
+
+test('a separate cover image is stored, served and access-checked', async () => {
+  const covered = (await (
+    await upload({
+      title: 'Covered read',
+      cover: { mime: 'image/png', bytes: [137, 80, 78, 71] },
+    })
+  ).json()) as { item: { id: string; hasCover: boolean } }
+  expect(covered.item.hasCover).toBe(true)
+
+  const cover = await call(`/api/items/${covered.item.id}/cover`, 'alice')
+  expect(cover.status).toBe(200)
+  expect(cover.headers.get('Content-Type')).toBe('image/png')
+  expect(new Uint8Array(await cover.arrayBuffer())).toEqual(
+    new Uint8Array([137, 80, 78, 71]),
+  )
+
+  const plain = (await (await upload({ title: 'No cover read' })).json()) as {
+    item: { id: string; hasCover: boolean }
+  }
+  expect(plain.item.hasCover).toBe(false)
+  expect((await call(`/api/items/${plain.item.id}/cover`, 'alice')).status).toBe(
+    404,
+  )
+
+  // A cover has to be an image, and private covers stay private.
+  expect(
+    (await upload({ title: 'Bad cover', cover: { mime: 'application/pdf' } }))
+      .status,
+  ).toBe(415)
+  const hidden = (await (
+    await upload({
+      title: 'Hidden cover',
+      visibility: 'private',
+      cover: { mime: 'image/jpeg' },
+    })
+  ).json()) as { item: { id: string } }
+  expect((await call(`/api/items/${hidden.item.id}/cover`, 'bob')).status).toBe(
+    404,
+  )
+  expect(
+    (await call(`/api/items/${hidden.item.id}/cover`, 'alice')).status,
+  ).toBe(200)
 })
 
 test('missing storage or database reports setup and local preview stays local', async () => {

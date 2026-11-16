@@ -10,6 +10,8 @@ const table = [
     mime TEXT NOT NULL,
     size INTEGER NOT NULL,
     object_key TEXT NOT NULL,
+    cover_key TEXT,
+    cover_mime TEXT,
     visibility TEXT NOT NULL,
     reach INTEGER NOT NULL DEFAULT 0,
     opens INTEGER NOT NULL DEFAULT 0,
@@ -26,7 +28,11 @@ const indexes = [
 ]
 
 /** Columns added after the first release; each runs once and is then a no-op. */
-const additions = [`ALTER TABLE items ADD COLUMN opens INTEGER NOT NULL DEFAULT 0`]
+const additions = [
+  `ALTER TABLE items ADD COLUMN opens INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE items ADD COLUMN cover_key TEXT`,
+  `ALTER TABLE items ADD COLUMN cover_mime TEXT`,
+]
 
 const ready = new WeakMap<D1Database, Promise<void>>()
 export function ensureSchema(db: D1Database): Promise<void> {
@@ -57,6 +63,8 @@ export type ItemRow = {
   mime: string
   size: number
   object_key: string
+  cover_key: string | null
+  cover_mime: string | null
   visibility: string
   /** Legacy column, no longer used by the API or the interface. */
   reach: number
@@ -73,6 +81,7 @@ export const mapItem = (row: ItemRow, viewer: string): Item => ({
   ownerName: row.owner_name,
   isOwner: row.owner_sub === viewer,
   size: row.size,
+  hasCover: Boolean(row.cover_key),
   opens: row.opens,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
