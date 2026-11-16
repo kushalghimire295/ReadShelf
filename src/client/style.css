@@ -486,42 +486,48 @@ button:disabled {
   background: var(--green-soft);
   color: var(--green);
 }
-.share {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: var(--surface-2);
-  border-radius: 13px;
-  padding: 7px;
+/* ---------- confirmation dialog ---------- */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(10, 8, 6, 0.62);
 }
-.seg {
-  display: flex;
-  gap: 3px;
-  background: var(--control);
-  padding: 3px;
-  border-radius: 9px;
-}
-.seg-btn {
-  flex: 1;
-  border: 0;
-  background: transparent;
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: 550;
-  color: var(--muted);
-  padding: 5px 4px;
-  min-height: 28px;
-  border-radius: 7px;
-  cursor: pointer;
-}
-.seg-btn.on {
+.modal-card {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  max-width: 390px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
   background: var(--surface);
-  color: var(--ink);
-  box-shadow: 0 1px 2px rgba(56, 44, 30, 0.12);
+  box-shadow: 0 34px 70px -40px rgba(0, 0, 0, 0.85);
 }
-.share .quiet {
-  justify-self: start;
-  align-self: flex-start;
+.modal-card h2 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+.modal-text {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.modal-text strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 /* ---------- my adds ---------- */
@@ -620,10 +626,20 @@ button:disabled {
   font-size: 11.5px;
   color: var(--faint);
 }
+.add-action {
+  flex: none;
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+}
 .add-row .pill {
   margin: 0;
   flex: none;
-  align-self: center;
+}
+.add-switch {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--faint);
 }
 .my-adds-empty {
   margin: 2px 2px 4px;

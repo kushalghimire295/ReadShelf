@@ -156,6 +156,9 @@ function App() {
   const [shelf, setShelf] = useState<Item[]>([])
   const [feedState, setFeedState] = useState<'idle' | 'loading' | 'done'>('idle')
   const [reader, setReader] = useState<Item | null>(null)
+  // The document whose sharing is being confirmed in the dialog.
+  const [pending, setPending] = useState<Item | null>(null)
+  const [switching, setSwitching] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
@@ -245,9 +248,12 @@ function App() {
   }, [loadFeed, loadPopular, loadShelf])
 
   useEffect(() => {
-    if (!reader) return
+    if (!reader && !pending) return
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setReader(null)
+      if (event.key === 'Escape') {
+        setReader(null)
+        setPending(null)
+      }
     }
     window.addEventListener('keydown', onKey)
     document.body.style.overflow = 'hidden'
@@ -255,7 +261,7 @@ function App() {
       window.removeEventListener('keydown', onKey)
       document.body.style.overflow = ''
     }
-  }, [reader])
+  }, [reader, pending])
 
   async function upload(event: React.FormEvent) {
     event.preventDefault()
@@ -298,7 +304,7 @@ function App() {
   async function patch(
     item: Item,
     changes: { visibility?: Visibility },
-  ) {
+  ): Promise<boolean> {
     setError('')
     setNotice('')
     try {
@@ -314,22 +320,28 @@ function App() {
         current.map((entry) => (entry.id === item.id ? result.item : entry)),
       )
       if (changes.visibility) void loadFeed()
+      return true
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not change sharing.')
+      return false
     }
   }
 
-  async function remove(item: Item) {
-    setError('')
-    try {
-      await request(`/api/items/${item.id}`, { method: 'DELETE' })
-      setShelf((current) => current.filter((entry) => entry.id !== item.id))
-      setFeed((current) => current.filter((entry) => entry.id !== item.id))
-      setPopular((current) => current.filter((entry) => entry.id !== item.id))
-      if (reader?.id === item.id) setReader(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not delete that item.')
-    }
+  /** Confirm the flip, then apply it and report the new state. */
+  async function confirmSharing() {
+    if (!pending) return
+    const next: Visibility =
+      pending.visibility === 'public' ? 'private' : 'public'
+    setSwitching(true)
+    const ok = await patch(pending, { visibility: next })
+    setSwitching(false)
+    setPending(null)
+    if (ok)
+      setNotice(
+        next === 'private'
+          ? 'Now private — only you can open it.'
+          : 'Now public — it appears in other readers’ Home feeds.',
+      )
   }
 
   /** Keep every list in step with a freshly counted item. */
@@ -619,35 +631,10 @@ function App() {
                       {formatSize(item.size)} · {item.opens}{' '}
                       {item.opens === 1 ? 'open' : 'opens'}
                     </span>
-                    <span
-                      className={`pill ${item.visibility}`}
-                    >
+                    <span className={`pill ${item.visibility}`}>
                       {item.visibility === 'private' ? 'Private' : 'Public'}
                     </span>
                   </button>
-                  <div className="share">
-                    <div className="seg" role="group" aria-label={`Sharing for ${item.title}`}>
-                      {(['private', 'public'] as const).map((option) => (
-                        <button
-                          key={option}
-                          type="button"
-                          className={
-                            item.visibility === option ? 'seg-btn on' : 'seg-btn'
-                          }
-                          onClick={() => void patch(item, { visibility: option })}
-                        >
-                          {option === 'private' ? 'Private' : 'Public'}
-                        </button>
-                      ))}
-                    </div>
-                    <button
-                      type="button"
-                      className="quiet small danger"
-                      onClick={() => void remove(item)}
-                    >
-                      Delete
-                    </button>
-                  </div>
                 </li>
               ))}
             </ul>
@@ -675,7 +662,8 @@ function App() {
                     <button
                       type="button"
                       className="add-row"
-                      onClick={() => openItem(item)}
+                      aria-label={`Change sharing for ${item.title}`}
+                      onClick={() => setPending(item)}
                     >
                       <Thumb item={item} />
                       <span className="add-body">
@@ -686,8 +674,15 @@ function App() {
                           {item.opens === 1 ? 'open' : 'opens'}
                         </span>
                       </span>
-                      <span className={`pill ${item.visibility}`}>
-                        {item.visibility === 'private' ? 'Private' : 'Public'}
+                      <span className="add-action">
+                        <span className={`pill ${item.visibility}`}>
+                          {item.visibility === 'private' ? 'Private' : 'Public'}
+                        </span>
+                        <span className="add-switch">
+                          {item.visibility === 'private'
+                            ? 'Tap to share'
+                            : 'Tap to hide'}
+                        </span>
                       </span>
                     </button>
                   </li>
@@ -838,6 +833,51 @@ function App() {
             </div>
           </form>
         </section>
+      )}
+
+      {pending && (
+        <div
+          className="modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-title"
+        >
+          <div className="modal-card">
+            <h2 id="confirm-title">
+              {pending.visibility === 'public'
+                ? 'Make it private?'
+                : 'Share it publicly?'}
+            </h2>
+            <p className="modal-text">
+              <strong>{pending.title}</strong>{' '}
+              {pending.visibility === 'public'
+                ? 'will disappear from Home and Most opened. Only you will be able to open it.'
+                : 'will appear in other readers’ Home feeds, and anyone signed in can open it.'}
+            </p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="quiet small"
+                onClick={() => setPending(null)}
+                disabled={switching}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="primary small"
+                onClick={() => void confirmSharing()}
+                disabled={switching}
+              >
+                {switching
+                  ? 'Saving…'
+                  : pending.visibility === 'public'
+                    ? 'Make private'
+                    : 'Make public'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {reader && (
