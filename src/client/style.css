@@ -169,20 +169,21 @@ main {
   );
   box-shadow: 3px 3px 0 var(--accent-soft);
 }
+/* Phones: an edge-to-edge opaque bar. A floating pill left gaps at its sides
+   and bottom where page content showed through while scrolling. */
 .tabs {
   position: fixed;
-  left: 10px;
-  right: 10px;
-  bottom: calc(10px + env(safe-area-inset-bottom));
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 32;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 2px;
-  padding: 6px;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  box-shadow: 0 20px 44px -26px rgba(38, 28, 16, 0.75);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -16px 30px -26px rgba(38, 28, 16, 0.8);
 }
 @media (max-width: 699px) {
   main {
@@ -1113,9 +1114,8 @@ button:disabled {
     gap: 16px;
     margin: 0 0 4px;
     padding: 8px 10px 8px 16px;
-    background: color-mix(in srgb, var(--surface) 86%, transparent);
-    backdrop-filter: blur(16px) saturate(150%);
-    -webkit-backdrop-filter: blur(16px) saturate(150%);
+    /* Solid: the bar is sticky, so frosted glass let page text show through. */
+    background: var(--surface);
     border: 1px solid var(--line);
     border-radius: 18px;
     box-shadow: 0 16px 36px -32px rgba(48, 36, 22, 0.9);
