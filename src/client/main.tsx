@@ -434,7 +434,7 @@ function App() {
                 setNotice('')
                 if (key === 'home') void loadFeed()
                 if (key === 'popular') void loadPopular()
-                if (key === 'shelf') void loadShelf()
+                if (key === 'shelf' || key === 'add') void loadShelf()
               }}
             >
               <NavIcon name={key} />
@@ -571,9 +571,6 @@ function App() {
         <section className="page" aria-labelledby="shelf-title">
           <div className="page-head">
             <h1 id="shelf-title">My shelf</h1>
-            <button type="button" className="small" onClick={() => setView('add')}>
-              Add a read
-            </button>
           </div>
 
           {!shelf.length ? (
@@ -643,7 +640,7 @@ function App() {
           <section className="my-adds" aria-labelledby="my-adds-title">
             <div className="my-adds-head">
               <h2 id="my-adds-title">My Adds</h2>
-              <span>{shelf.length}</span>
+              {shelf.length ? <span>{shelf.length}</span> : null}
             </div>
             {!shelf.length ? (
               <p className="my-adds-empty">Nothing added yet.</p>
