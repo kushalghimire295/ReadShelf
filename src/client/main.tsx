@@ -640,6 +640,41 @@ function App() {
             <h1 id="add-title">Add a read</h1>
           </div>
 
+          <section className="my-adds" aria-labelledby="my-adds-title">
+            <div className="my-adds-head">
+              <h2 id="my-adds-title">My Adds</h2>
+              <span>{shelf.length}</span>
+            </div>
+            {!shelf.length ? (
+              <p className="my-adds-empty">Nothing added yet.</p>
+            ) : (
+              <ul className="add-list">
+                {shelf.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      className="add-row"
+                      onClick={() => openItem(item)}
+                    >
+                      <Thumb item={item} />
+                      <span className="add-body">
+                        <span className="add-title">{item.title}</span>
+                        <span className="add-meta">
+                          {item.kind === 'pdf' ? 'PDF' : 'Image'} ·{' '}
+                          {formatSize(item.size)} · {item.opens}{' '}
+                          {item.opens === 1 ? 'open' : 'opens'}
+                        </span>
+                      </span>
+                      <span className={`pill ${item.visibility}`}>
+                        {item.visibility === 'private' ? 'Private' : 'Public'}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
           <form className="upload" onSubmit={upload}>
             <label className={`drop${file ? ' has-file' : ''}`}>
               <input

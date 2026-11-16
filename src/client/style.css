@@ -523,6 +523,113 @@ button:disabled {
   align-self: flex-start;
 }
 
+/* ---------- my adds ---------- */
+.my-adds {
+  max-width: 620px;
+  margin: 0 0 14px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.my-adds-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 0 2px;
+}
+.my-adds-head h2 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.my-adds-head span {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  background: var(--control);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.add-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 258px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.add-list li + li {
+  border-top: 1px solid var(--line);
+}
+.add-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 4px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.add-row:hover {
+  background: var(--hover);
+}
+.add-row .thumb {
+  width: 44px;
+  height: 44px;
+  aspect-ratio: auto;
+  flex: none;
+  margin: 0;
+  border-radius: 9px;
+}
+.add-row .pdf-glyph {
+  font-size: 8px;
+  padding: 3px 5px;
+  letter-spacing: 0.08em;
+}
+.add-row .pdf-lines {
+  display: none;
+}
+.add-body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.add-title {
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.add-meta {
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.add-row .pill {
+  margin: 0;
+  flex: none;
+  align-self: center;
+}
+.my-adds-empty {
+  margin: 2px 2px 4px;
+  font-size: 13px;
+  color: var(--faint);
+}
+
 /* ---------- upload ---------- */
 .upload {
   display: grid;
