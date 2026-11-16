@@ -58,6 +58,7 @@ export type ItemRow = {
   size: number
   object_key: string
   visibility: string
+  /** Legacy column, no longer used by the API or the interface. */
   reach: number
   opens: number
   created_at: number
@@ -69,7 +70,6 @@ export const mapItem = (row: ItemRow, viewer: string): Item => ({
   title: row.title,
   kind: row.kind === 'pdf' ? 'pdf' : ('image' as ItemKind),
   visibility: row.visibility === 'private' ? 'private' : ('public' as Visibility),
-  reach: row.reach,
   ownerName: row.owner_name,
   isOwner: row.owner_sub === viewer,
   size: row.size,

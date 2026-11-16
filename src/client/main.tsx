@@ -14,7 +14,6 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 const fileUrl = (item: Item) => `/api/items/${item.id}/file`
-const REACH_STEPS = [10, 25, 50, 75, 100]
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -72,9 +71,6 @@ function MoonIcon() {
     </svg>
   )
 }
-
-const reachLabel = (value: number) =>
-  value === 100 ? 'Every Home feed' : `About ${value}% of Home feeds`
 
 type View = 'home' | 'popular' | 'shelf' | 'add'
 
@@ -156,7 +152,6 @@ function App() {
   const [file, setFile] = useState<File | null>(null)
   const [title, setTitle] = useState('')
   const [visibility, setVisibility] = useState<Visibility>('private')
-  const [reach, setReach] = useState(50)
   const [uploading, setUploading] = useState(false)
   const [theme, setTheme] = useState<'light' | 'dark'>(() =>
     document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light',
@@ -255,7 +250,6 @@ function App() {
       form.append('file', file)
       if (title.trim()) form.append('title', title.trim())
       form.append('visibility', visibility)
-      if (visibility === 'public') form.append('reach', String(reach))
       const result = await request<{ item: Item }>('/api/items', {
         method: 'POST',
         body: form,
@@ -263,7 +257,6 @@ function App() {
       setShelf((current) => [result.item, ...current])
       setFile(null)
       setTitle('')
-      setReach(50)
       setView('shelf')
       setNotice(
         result.item.visibility === 'public'
@@ -280,7 +273,7 @@ function App() {
 
   async function patch(
     item: Item,
-    changes: { visibility?: Visibility; reach?: number },
+    changes: { visibility?: Visibility },
   ) {
     setError('')
     setNotice('')
@@ -622,11 +615,7 @@ function App() {
                     <span
                       className={`pill ${item.visibility}`}
                     >
-                      {item.visibility === 'private'
-                        ? 'Private'
-                        : item.reach === 100
-                          ? 'Public'
-                          : `Public · ${item.reach}%`}
+                      {item.visibility === 'private' ? 'Private' : 'Public'}
                     </span>
                   </button>
                   <div className="share">
@@ -638,33 +627,12 @@ function App() {
                           className={
                             item.visibility === option ? 'seg-btn on' : 'seg-btn'
                           }
-                          onClick={() =>
-                            void patch(item, {
-                              visibility: option,
-                              reach: option === 'public' ? item.reach || 50 : 0,
-                            })
-                          }
+                          onClick={() => void patch(item, { visibility: option })}
                         >
                           {option === 'private' ? 'Private' : 'Public'}
                         </button>
                       ))}
                     </div>
-                    {item.visibility === 'public' && (
-                      <label className="reach">
-                        <span>{reachLabel(item.reach)}</span>
-                        <input
-                          type="range"
-                          min={10}
-                          max={100}
-                          step={5}
-                          value={item.reach || 10}
-                          onChange={(e) =>
-                            void patch(item, { reach: Number(e.target.value) })
-                          }
-                          aria-label={`Home feed appearance for ${item.title}`}
-                        />
-                      </label>
-                    )}
                     <button
                       type="button"
                       className="quiet small danger"
@@ -771,42 +739,6 @@ function App() {
               </div>
             </fieldset>
 
-            {visibility === 'public' && (
-              <div className="field">
-                <span className="field-label">
-                  How often it appears on Home · {reach}%
-                </span>
-                <input
-                  className="reach-slider"
-                  type="range"
-                  min={10}
-                  max={100}
-                  step={5}
-                  value={reach}
-                  disabled={!enabled || uploading}
-                  onChange={(e) => setReach(Number(e.target.value))}
-                  aria-label="Percentage of Home feeds it appears in"
-                />
-                <div className="steps" aria-hidden="true">
-                  {REACH_STEPS.map((step) => (
-                    <button
-                      key={step}
-                      type="button"
-                      className={reach === step ? 'step on' : 'step'}
-                      onClick={() => setReach(step)}
-                      tabIndex={-1}
-                    >
-                      {step}%
-                    </button>
-                  ))}
-                </div>
-                <p className="hint">
-                  Public reads are shown to other readers, and this item will
-                  surface in roughly {reach}% of their Home feeds.
-                </p>
-              </div>
-            )}
-
             <div className="form-footer">
               <button
                 className="primary"
@@ -821,7 +753,6 @@ function App() {
                   setFile(null)
                   setTitle('')
                   setVisibility('private')
-                  setReach(50)
                 }}
                 disabled={uploading}
               >
@@ -846,7 +777,7 @@ function App() {
                 {reader.isOwner
                   ? reader.visibility === 'private'
                     ? 'Private · only you'
-                    : `Public · ${reachLabel(reader.reach)}`
+                    : 'Public'
                   : reader.ownerName}
                 {' · '}
                 {reader.opens} {reader.opens === 1 ? 'open' : 'opens'}

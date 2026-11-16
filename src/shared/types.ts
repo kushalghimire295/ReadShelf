@@ -6,8 +6,6 @@ export type Item = {
   title: string
   kind: ItemKind
   visibility: Visibility
-  /** Rough chance, 0–100, that this public item surfaces in a Home feed. */
-  reach: number
   ownerName: string
   isOwner: boolean
   size: number

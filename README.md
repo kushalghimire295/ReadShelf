@@ -8,10 +8,9 @@ shelf; anything they mark public is shown to other readers on the Home feed.
 - **Most opened** — an all-time ranking of public reads by how many times
   they have been opened. Private items are neither counted nor listed there,
   and only readers allowed to open an item can increment it.
-- **Public** — appears on other readers' Home feeds with a chosen *reach*
-  percentage (10–100). Each Home refresh includes the item with that
-  probability, so "25%" means roughly one feed in four.
-- Files live in R2 (`FILES`); titles, sharing and reach live in D1 (`DB`).
+- **Public** — appears on every other reader's Home feed, newest first. There
+  is no percentage or sampling: public means listed.
+- Files live in R2 (`FILES`); titles and sharing live in D1 (`DB`).
 
 ## Start and check
 
@@ -45,10 +44,10 @@ it — locally the app simply opens as a signed-in reader named “Reader”.
 | Route | Purpose |
 | --- | --- |
 | `GET /api/session` | current user, auth mode, database + storage readiness |
-| `GET /api/feed` | public items from other readers, sampled by reach |
+| `GET /api/feed` | public items from other readers, newest first |
 | `GET /api/items` | your own shelf (private and public) |
-| `POST /api/items` | multipart upload: `file`, `title`, `visibility`, `reach` |
-| `PATCH /api/items/:id` | rename, change visibility or reach |
+| `POST /api/items` | multipart upload: `file`, `title`, `visibility` |
+| `PATCH /api/items/:id` | rename or change visibility |
 | `DELETE /api/items/:id` | remove the row and the stored object |
 | `GET /api/items/:id/file` | inline PDF/image stream, authorised per request |
 | `POST /api/items/:id/open` | record one open and return the new total |
@@ -73,8 +72,7 @@ application secret or separate cloud account is needed.
 
 `bun test` runs against real local D1 and R2 through Miniflare: upload bytes
 round-trip, private items stay owner-only (including the file route), public
-items surface in other feeds, reach 0 hides an item from feeds, sharing changes
-take effect, opens are counted and ranked while private items stay out of the
-ranking, deletion removes the row, and signed-out/foreign-origin/oversized
-requests are refused. After provisioning, verify real sign-in, refresh, sign-out
+items surface in other feeds, sharing changes take effect, opens are counted and
+ranked while private items stay out of the ranking, deletion removes the row, and
+signed-out/foreign-origin/oversized requests are refused. After provisioning, verify real sign-in, refresh, sign-out
 and two accounts' isolation in a browser.

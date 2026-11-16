@@ -74,7 +74,6 @@ const call = (
 type Upload = {
   title?: string
   visibility?: 'public' | 'private'
-  reach?: number
   mime?: string
   bytes?: number[]
   name?: string
@@ -85,7 +84,6 @@ type Upload = {
 function upload({
   title = 'Field notes',
   visibility = 'public',
-  reach = 100,
   mime = 'application/pdf',
   bytes = [37, 80, 68, 70, 45, 49],
   name = 'notes.pdf',
@@ -96,7 +94,6 @@ function upload({
   form.append('file', new File([new Uint8Array(bytes)], name, { type: mime }))
   form.append('title', title)
   form.append('visibility', visibility)
-  form.append('reach', String(reach))
   return app.request(
     'https://app.example.test/api/items',
     {
@@ -150,19 +147,19 @@ test('private uploads are only visible to their owner', async () => {
   )
 })
 
-test('public uploads surface in other feeds, honour reach and serve their bytes', async () => {
+test('public uploads surface in other feeds and serve their bytes', async () => {
   const response = await upload({
     title: 'Shared sketch',
     mime: 'image/png',
     bytes: [137, 80, 78, 71],
     name: 'sketch.png',
-    reach: 100,
   })
   expect(response.status).toBe(201)
   const { item } = (await response.json()) as {
-    item: { id: string; kind: string; visibility: string; reach: number }
+    item: { id: string; kind: string; visibility: string }
   }
-  expect(item).toMatchObject({ kind: 'image', visibility: 'public', reach: 100 })
+  expect(item).toMatchObject({ kind: 'image', visibility: 'public' })
+  expect(item).not.toHaveProperty('reach')
 
   expect((await items('/api/feed', 'bob')).map((entry) => entry.title)).toEqual([
     'Shared sketch',
@@ -178,17 +175,18 @@ test('public uploads surface in other feeds, honour reach and serve their bytes'
     new Uint8Array([137, 80, 78, 71]),
   )
 
-  // Reaching nobody means only the owner can see it.
-  const amount = await upload({ title: 'Ghost read', reach: 0 })
-  const created = (await amount.json()) as { item: { id: string } }
-  expect(await items('/api/feed', 'bob')).toHaveLength(1)
-  expect(created.item.id).toBeString()
+  // Public simply means public: no percentage gates the feed.
+  await upload({ title: 'Second read' })
+  expect((await items('/api/feed', 'bob')).map((entry) => entry.title)).toEqual([
+    'Second read',
+    'Shared sketch',
+  ])
 })
 
 test('sharing can change and deleting removes the stored file', async () => {
   const before = (await items('/api/feed', 'bob')).length
   const created = (await (
-    await upload({ title: 'Move me', reach: 100 })
+    await upload({ title: 'Move me' })
   ).json()) as { item: { id: string } }
   expect(await items('/api/feed', 'bob')).toHaveLength(before + 1)
 
@@ -197,7 +195,7 @@ test('sharing can change and deleting removes the stored file', async () => {
   })
   expect(hidden.status).toBe(200)
   expect(await hidden.json()).toMatchObject({
-    item: { visibility: 'private', reach: 0 },
+    item: { visibility: 'private' },
   })
   expect(await items('/api/feed', 'bob')).toHaveLength(before)
   expect((await call(`/api/items/${created.item.id}/file`, 'bob')).status).toBe(
@@ -206,11 +204,10 @@ test('sharing can change and deleting removes the stored file', async () => {
 
   const reshared = await call(`/api/items/${created.item.id}`, 'alice', 'PATCH', {
     visibility: 'public',
-    reach: 25,
     title: 'Move me again',
   })
   expect(await reshared.json()).toMatchObject({
-    item: { visibility: 'public', reach: 25, title: 'Move me again' },
+    item: { visibility: 'public', title: 'Move me again' },
   })
 
   expect(
@@ -236,7 +233,6 @@ test('rejects unsupported types, bad metadata, foreign origins and huge uploads'
   expect((await upload({ mime: 'application/zip', name: 'a.zip' })).status).toBe(
     415,
   )
-  expect((await upload({ reach: 101 })).status).toBe(400)
   expect((await upload({ origin: 'https://foreign.example' })).status).toBe(403)
   expect(
     (await upload({ bytes: new Array(16 * 1024 * 1024).fill(37) })).status,
@@ -262,7 +258,7 @@ test('rejects unsupported types, bad metadata, foreign origins and huge uploads'
     {},
     { title: '' },
     { visibility: 'shared' },
-    { reach: 1.5 },
+    { reach: 25 },
     { owner_sub: 'bob' },
   ]) {
     expect(
@@ -273,7 +269,7 @@ test('rejects unsupported types, bad metadata, foreign origins and huge uploads'
 
 test('opens are counted per permitted reader and ranked, private items excluded', async () => {
   const leader = (await (
-    await upload({ title: 'Ranked read', reach: 100 })
+    await upload({ title: 'Ranked read' })
   ).json()) as { item: { id: string; opens: number } }
   expect(leader.item.opens).toBe(0)
 
@@ -286,7 +282,7 @@ test('opens are counted per permitted reader and ranked, private items excluded'
   })
 
   const runnerUp = (await (
-    await upload({ title: 'Runner up', reach: 100 })
+    await upload({ title: 'Runner up' })
   ).json()) as { item: { id: string } }
   expect((await open(runnerUp.item.id, 'bob')).status).toBe(200)
 

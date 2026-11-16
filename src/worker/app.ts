@@ -14,7 +14,6 @@ type Authenticate = (request: Request, env: Env) => Promise<FreebuffUser | null>
 
 const MAX_UPLOAD = 15 * 1024 * 1024
 const MAX_TITLE = 120
-const FEED_SIZE = 24
 const COLUMNS =
   'id, owner_sub, owner_name, title, kind, mime, size, object_key, visibility, reach, opens, created_at, updated_at'
 
@@ -25,15 +24,6 @@ const TYPES: Record<string, { kind: ItemKind; ext: string }> = {
   'image/webp': { kind: 'image', ext: 'webp' },
   'image/gif': { kind: 'image', ext: 'gif' },
   'image/avif': { kind: 'image', ext: 'avif' },
-}
-
-/** A public item surfaces in someone's Home feed with this chance in 100. */
-const reach = (value: unknown): number | null => {
-  if (value === undefined || value === null || value === '') return 100
-  const number = typeof value === 'number' ? value : Number(String(value))
-  return Number.isInteger(number) && number >= 0 && number <= 100
-    ? number
-    : null
 }
 
 function cleanTitle(value: unknown): string | null {
@@ -52,21 +42,13 @@ function fileName(title: string, ext: string): string {
   return `${base}.${ext}`
 }
 
-/** Pick each public item into this feed with probability `reach`%. */
-function surface(items: ItemRow[]): ItemRow[] {
-  return items
-    .filter((item) => Math.random() * 100 < item.reach)
-    .sort((a, b) => b.created_at - a.created_at)
-    .slice(0, FEED_SIZE)
-}
-
-type JsonFields = { title?: string; visibility?: 'public' | 'private'; reach?: number }
+type JsonFields = { title?: string; visibility?: 'public' | 'private' }
 
 function parseJson(body: unknown): { error: string } | { fields: JsonFields } {
   if (!body || typeof body !== 'object' || Array.isArray(body))
     return { error: 'Send a JSON object.' }
   const input = body as Record<string, unknown>
-  const allowed = ['title', 'visibility', 'reach']
+  const allowed = ['title', 'visibility']
   if (Object.keys(input).some((key) => !allowed.includes(key)))
     return { error: 'Unexpected field.' }
   if (!Object.keys(input).length) return { error: 'Nothing to update.' }
@@ -82,11 +64,6 @@ function parseJson(body: unknown): { error: string } | { fields: JsonFields } {
     if (input.visibility !== 'public' && input.visibility !== 'private')
       return { error: 'Visibility must be public or private.' }
     fields.visibility = input.visibility
-  }
-  if ('reach' in input) {
-    const value = reach(input.reach)
-    if (value === null) return { error: 'Reach must be a whole number 0–100.' }
-    fields.reach = value
   }
   return { fields }
 }
@@ -140,11 +117,13 @@ export function createApp(authenticate: Authenticate = currentUser) {
     const rows = await c
       .get('db')
       .prepare(
-        `SELECT ${COLUMNS} FROM items WHERE visibility = 'public' AND reach > 0 AND owner_sub <> ? ORDER BY created_at DESC LIMIT 300`,
+        `SELECT ${COLUMNS} FROM items WHERE visibility = 'public' AND owner_sub <> ? ORDER BY created_at DESC LIMIT 60`,
       )
       .bind(c.get('user').sub)
       .all<ItemRow>()
-    return c.json({ items: surface(rows.results).map((row) => mapItem(row, c.get('user').sub)) })
+    return c.json({
+      items: rows.results.map((row) => mapItem(row, c.get('user').sub)),
+    })
   })
 
   // All-time ranking. Private items never appear here, and only public opens
@@ -208,9 +187,6 @@ export function createApp(authenticate: Authenticate = currentUser) {
         return c.json({ error: `A title needs 1–${MAX_TITLE} characters.` }, 400)
 
       const visibility = form.visibility === 'private' ? 'private' : 'public'
-      const chosen = reach(form.reach)
-      if (chosen === null)
-        return c.json({ error: 'Reach must be a whole number 0–100.' }, 400)
 
       const user = c.get('user')
       const id = crypto.randomUUID()
@@ -226,7 +202,8 @@ export function createApp(authenticate: Authenticate = currentUser) {
         size: file.size,
         object_key: key,
         visibility,
-        reach: visibility === 'private' ? 0 : chosen,
+        // `reach` predates plain public sharing; the column is kept at 0.
+        reach: 0,
         opens: 0,
         created_at: now,
         updated_at: now,
@@ -280,14 +257,11 @@ export function createApp(authenticate: Authenticate = currentUser) {
     const visibility = parsed.fields.visibility ?? current.visibility
     const updated = await db
       .prepare(
-        `UPDATE items SET title = ?, visibility = ?, reach = ?, updated_at = ? WHERE id = ? AND owner_sub = ? RETURNING ${COLUMNS}`,
+        `UPDATE items SET title = ?, visibility = ?, updated_at = ? WHERE id = ? AND owner_sub = ? RETURNING ${COLUMNS}`,
       )
       .bind(
         parsed.fields.title ?? current.title,
         visibility,
-        visibility === 'private'
-          ? 0
-          : (parsed.fields.reach ?? (current.reach || 100)),
         Date.now(),
         id,
         owner,
