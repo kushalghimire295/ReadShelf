@@ -178,9 +178,9 @@ main {
   bottom: 0;
   z-index: 32;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 2px;
-  padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+  padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
   background: var(--surface);
   border-top: 1px solid var(--line);
   box-shadow: 0 -16px 30px -26px rgba(38, 28, 16, 0.8);
@@ -539,37 +539,19 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: var(--radius);
 }
-.my-adds-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
-  padding: 0 2px;
-}
-.my-adds-head h2 {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-.my-adds-head span {
+.count {
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
   background: var(--control);
   border-radius: 999px;
   padding: 2px 9px;
+  margin-bottom: 4px;
 }
 .add-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 258px;
-  overflow: auto;
-  overscroll-behavior: contain;
 }
 .add-list li + li {
   border-top: 1px solid var(--line);
@@ -580,17 +562,25 @@ button:disabled {
   gap: 10px;
   width: 100%;
   padding: 7px 4px;
-  border: 0;
   border-radius: 10px;
+}
+.add-row:hover {
+  background: var(--hover);
+}
+.add-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
   background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-}
-.add-row:hover {
-  background: var(--hover);
 }
 .add-row .thumb {
   width: 44px;
@@ -626,20 +616,24 @@ button:disabled {
   font-size: 11.5px;
   color: var(--faint);
 }
-.add-action {
-  flex: none;
-  display: grid;
-  justify-items: end;
-  gap: 3px;
-}
 .add-row .pill {
   margin: 0;
   flex: none;
 }
-.add-switch {
-  font-size: 10px;
-  letter-spacing: 0.02em;
-  color: var(--faint);
+/* The pill itself is the sharing control in My Adds. */
+button.pill {
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+button.pill:hover {
+  border-color: var(--line-strong);
 }
 .my-adds-empty {
   margin: 2px 2px 4px;

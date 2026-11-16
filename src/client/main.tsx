@@ -74,12 +74,13 @@ function MoonIcon() {
   )
 }
 
-type View = 'home' | 'popular' | 'shelf' | 'add'
+type View = 'home' | 'popular' | 'shelf' | 'adds' | 'add'
 
 const NAV_ITEMS: { key: View; label: string }[] = [
   { key: 'home', label: 'Home' },
   { key: 'popular', label: 'Most opened' },
   { key: 'shelf', label: 'My shelf' },
+  { key: 'adds', label: 'My Adds' },
   { key: 'add', label: 'Add' },
 ]
 
@@ -112,6 +113,13 @@ function NavIcon({ name }: { name: View }) {
         <path d="M12 3.5 21 8l-9 4.5L3 8Z" />
         <path d="m3 12.5 9 4.5 9-4.5" />
         <path d="m3 16.8 9 4.4 9-4.4" opacity="0.55" />
+      </svg>
+    )
+  if (name === 'adds')
+    return (
+      <svg {...common}>
+        <rect x="4" y="3.6" width="16" height="16.8" rx="2.6" />
+        <path d="M8 9h8M8 12.8h8M8 16.6h4.6" />
       </svg>
     )
   return (
@@ -287,7 +295,7 @@ function App() {
       setFile(null)
       setCover(null)
       setTitle('')
-      setView('shelf')
+      setView('adds')
       setNotice(
         result.item.visibility === 'public'
           ? 'Added to your shelf and shared publicly.'
@@ -470,7 +478,7 @@ function App() {
                 setNotice('')
                 if (key === 'home') void loadFeed()
                 if (key === 'popular') void loadPopular()
-                if (key === 'shelf' || key === 'add') void loadShelf()
+                if (key === 'shelf' || key === 'adds') void loadShelf()
               }}
             >
               <NavIcon name={key} />
@@ -642,54 +650,67 @@ function App() {
         </section>
       )}
 
-      {view === 'add' && (
-        <section className="page" aria-labelledby="add-title">
+      {view === 'adds' && (
+        <section className="page" aria-labelledby="adds-title">
           <div className="page-head">
-            <h1 id="add-title">Add a read</h1>
+            <h1 id="adds-title">My Adds</h1>
+            {shelf.length ? <span className="count">{shelf.length}</span> : null}
           </div>
 
-          <section className="my-adds" aria-labelledby="my-adds-title">
-            <div className="my-adds-head">
-              <h2 id="my-adds-title">My Adds</h2>
-              {shelf.length ? <span>{shelf.length}</span> : null}
-            </div>
+          <section className="my-adds" aria-labelledby="adds-list-title">
+            <h2 id="adds-list-title" className="sr-only">
+              Documents you added
+            </h2>
             {!shelf.length ? (
               <p className="my-adds-empty">Nothing added yet.</p>
             ) : (
               <ul className="add-list">
                 {shelf.map((item) => (
                   <li key={item.id}>
-                    <button
-                      type="button"
-                      className="add-row"
-                      aria-label={`Change sharing for ${item.title}`}
-                      onClick={() => setPending(item)}
-                    >
-                      <Thumb item={item} />
-                      <span className="add-body">
-                        <span className="add-title">{item.title}</span>
-                        <span className="add-meta">
-                          {item.kind === 'pdf' ? 'PDF' : 'Image'} ·{' '}
-                          {formatSize(item.size)} · {item.opens}{' '}
-                          {item.opens === 1 ? 'open' : 'opens'}
+                    <div className="add-row">
+                      <button
+                        type="button"
+                        className="add-open"
+                        aria-label={`Open ${item.title}`}
+                        onClick={() => openItem(item)}
+                      >
+                        <Thumb item={item} />
+                        <span className="add-body">
+                          <span className="add-title">{item.title}</span>
+                          <span className="add-meta">
+                            {item.kind === 'pdf' ? 'PDF' : 'Image'} ·{' '}
+                            {formatSize(item.size)} · {item.opens}{' '}
+                            {item.opens === 1 ? 'open' : 'opens'}
+                          </span>
                         </span>
-                      </span>
-                      <span className="add-action">
-                        <span className={`pill ${item.visibility}`}>
-                          {item.visibility === 'private' ? 'Private' : 'Public'}
-                        </span>
-                        <span className="add-switch">
-                          {item.visibility === 'private'
-                            ? 'Tap to share'
-                            : 'Tap to hide'}
-                        </span>
-                      </span>
-                    </button>
+                      </button>
+                      <button
+                        type="button"
+                        className={`pill act ${item.visibility}`}
+                        aria-label={`Change sharing for ${item.title}`}
+                        title={
+                          item.visibility === 'private'
+                            ? 'Make public'
+                            : 'Make private'
+                        }
+                        onClick={() => setPending(item)}
+                      >
+                        {item.visibility === 'private' ? 'Private' : 'Public'}
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>
             )}
           </section>
+        </section>
+      )}
+
+      {view === 'add' && (
+        <section className="page" aria-labelledby="add-title">
+          <div className="page-head">
+            <h1 id="add-title">Add a read</h1>
+          </div>
 
           <form className="upload" onSubmit={upload}>
             <label className={`drop${file ? ' has-file' : ''}`}>
