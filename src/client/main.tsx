@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Item, Session, Visibility } from '../shared/types'
 import './style.css'
@@ -328,11 +328,6 @@ function App() {
       .catch(() => undefined)
   }
 
-  const shared = useMemo(
-    () => shelf.filter((item) => item.visibility === 'public').length,
-    [shelf],
-  )
-
   if (!loaded)
     return (
       <main className="gate">
@@ -518,14 +513,7 @@ function App() {
       {view === 'popular' && (
         <section className="page" aria-labelledby="popular-title">
           <div className="page-head">
-            <div>
-              <p className="eyebrow">All time</p>
-              <h1 id="popular-title">Most opened on Readshelf.</h1>
-              <p className="lede">
-                Ranked by how many times each public read has been opened.
-                Private shelves are never counted or listed here.
-              </p>
-            </div>
+            <h1 id="popular-title">Most opened</h1>
             <button
               type="button"
               className="quiet small"
@@ -576,15 +564,7 @@ function App() {
       {view === 'shelf' && (
         <section className="page" aria-labelledby="shelf-title">
           <div className="page-head">
-            <div>
-              <p className="eyebrow">Your shelf</p>
-              <h1 id="shelf-title">Your shelves, your rules.</h1>
-              <p className="lede">
-                {shelf.length
-                  ? `${shelf.length} ${shelf.length === 1 ? 'read' : 'reads'} · ${shared} shared publicly`
-                  : 'Upload a PDF or an image to start your shelf.'}
-              </p>
-            </div>
+            <h1 id="shelf-title">My shelf</h1>
             <button type="button" className="small" onClick={() => setView('add')}>
               Add a read
             </button>
@@ -651,13 +631,7 @@ function App() {
       {view === 'add' && (
         <section className="page" aria-labelledby="add-title">
           <div className="page-head">
-            <div>
-              <p className="eyebrow">New read</p>
-              <h1 id="add-title">Put something on the shelf.</h1>
-              <p className="lede">
-                PDFs and images up to 15 MB. You choose who can open it.
-              </p>
-            </div>
+            <h1 id="add-title">Add a read</h1>
           </div>
 
           <form className="upload" onSubmit={upload}>
