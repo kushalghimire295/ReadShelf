@@ -1,16 +1,31 @@
-import { isSameOriginRequest } from '@freebuff/auth'
-import type { FreebuffUser } from '@freebuff/auth'
 import { Hono, type Handler } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import type { ItemKind } from '../shared/types'
-import { appOrigin, currentUser, isLocalPreview, type Env } from './auth'
+import {
+  allowsDevCode,
+  appOrigin,
+  clearSessionCookie,
+  clearStateCookie,
+  currentUser,
+  emailConfigured,
+  ensureAuthSchema,
+  finishGoogle,
+  googleAuthUrl,
+  googleEnabled,
+  isSameOrigin,
+  revokeSession,
+  startEmailCode,
+  verifyEmailCode,
+  type AuthUser,
+  type Env,
+} from './auth'
 import { ensureSchema, mapItem, type ItemRow } from './db'
 
 type AppContext = {
   Bindings: Env
-  Variables: { user: FreebuffUser; db: D1Database }
+  Variables: { user: AuthUser; db: D1Database }
 }
-type Authenticate = (request: Request, env: Env) => Promise<FreebuffUser | null>
+type Authenticate = (request: Request, env: Env) => Promise<AuthUser | null>
 
 const MAX_UPLOAD = 15 * 1024 * 1024
 const MAX_COVER = 5 * 1024 * 1024
@@ -89,22 +104,94 @@ export function createApp(authenticate: Authenticate = currentUser) {
   app.get('/api/session', async (c) =>
     c.json({
       user: await authenticate(c.req.raw, c.env),
-      mode: isLocalPreview(c.req.raw, c.env)
-        ? 'local'
-        : c.env.FREEBUFF_CLIENT_ID && c.env.APP_ORIGIN
-          ? 'freebuff'
-          : 'setup',
+      mode: 'ready',
       database: Boolean(c.env.DB),
       storage: Boolean(c.env.FILES),
+      email: emailConfigured(c.env) || allowsDevCode(c.req.raw, c.env),
+      google: googleEnabled(c.env),
+      devCode: allowsDevCode(c.req.raw, c.env),
     }),
   )
+
+  /* ---------- auth ---------- */
+  const authGuard: Handler<AppContext> = async (c, next) => {
+    const origin = appOrigin(c.req.raw, c.env)
+    if (!origin || !isSameOrigin(c.req.raw, origin))
+      return c.json({ error: 'Cross-origin request refused.' }, 403)
+    if (!c.env.DB)
+      return c.json({ error: 'Sign-in is not set up yet.' }, 503)
+    await next()
+  }
+
+  app.post('/api/auth/email', authGuard, async (c) => {
+    const body = await c.req.json().catch(() => null)
+    const result = await startEmailCode(
+      c.env.DB!,
+      (body as { email?: unknown } | null)?.email,
+      c.req.raw,
+      c.env,
+    )
+    if (!result.ok) return c.json({ error: result.error }, result.status)
+    return c.json({ ok: true, devCode: result.devCode ?? null })
+  })
+
+  app.post('/api/auth/email/verify', authGuard, async (c) => {
+    const body = (await c.req.json().catch(() => null)) as {
+      email?: unknown
+      code?: unknown
+    } | null
+    const result = await verifyEmailCode(
+      c.env.DB!,
+      body?.email,
+      body?.code,
+      c.req.raw,
+      c.env,
+    )
+    if (!result.ok) return c.json({ error: result.error }, result.status)
+    c.header('Set-Cookie', result.cookie)
+    return c.json({ user: result.user })
+  })
+
+  app.post('/api/auth/signout', authGuard, async (c) => {
+    await revokeSession(c.req.raw, c.env)
+    return new Response(null, {
+      status: 303,
+      headers: { Location: '/', 'Set-Cookie': clearSessionCookie(c.req.raw) },
+    })
+  })
+
+  app.get('/api/auth/google', async (c) => {
+    const start = googleAuthUrl(c.req.raw, c.env)
+    if (!start) return c.redirect('/?authError=google-unavailable', 303)
+    return new Response(null, {
+      status: 303,
+      headers: { Location: start.location, 'Set-Cookie': start.cookie },
+    })
+  })
+
+  app.get('/api/auth/google/callback', async (c) => {
+    if (!c.env.DB) return c.redirect('/?authError=signin-unavailable', 303)
+    const result = await finishGoogle(c.env.DB, c.req.raw, c.env)
+    if (!result.ok)
+      return new Response(null, {
+        status: 303,
+        headers: {
+          Location: `/?authError=${encodeURIComponent(result.error)}`,
+          'Set-Cookie': clearStateCookie(c.req.raw),
+        },
+      })
+    const headers = new Headers({ Location: '/' })
+    headers.append('Set-Cookie', result.cookie)
+    headers.append('Set-Cookie', clearStateCookie(c.req.raw))
+    return new Response(null, { status: 303, headers })
+  })
 
   const guard: Handler<AppContext> = async (c, next) => {
     const user = await authenticate(c.req.raw, c.env)
     if (!user) return c.json({ error: 'Sign in required.' }, 401)
     if (!['GET', 'HEAD'].includes(c.req.method)) {
       const origin = appOrigin(c.req.raw, c.env)
-      if (!origin || !isSameOriginRequest(c.req.raw, origin))
+      if (!origin || !isSameOrigin(c.req.raw, origin))
         return c.json({ error: 'Cross-origin request refused.' }, 403)
     }
     if (!c.env.DB)
@@ -112,6 +199,7 @@ export function createApp(authenticate: Authenticate = currentUser) {
         { error: 'This app is still being set up. Please try again later.' },
         503,
       )
+    await ensureAuthSchema(c.env.DB)
     await ensureSchema(c.env.DB)
     c.set('user', user)
     c.set('db', c.env.DB)

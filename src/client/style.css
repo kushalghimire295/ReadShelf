@@ -1118,6 +1118,64 @@ button.pill:hover {
 .gate-card .error {
   margin-top: 16px;
 }
+.signin {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+.signin .field {
+  gap: 6px;
+}
+.signin .field input {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--field);
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+}
+.signin .field input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.signin .field .code-input {
+  font-size: 19px;
+  letter-spacing: 0.34em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.signin .gate-button {
+  margin-top: 4px;
+}
+.signin-links {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.or-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 0;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.or-line::before,
+.or-line::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.dev-code {
+  margin-top: 14px;
+  font-size: 13px;
+}
 
 /* ---------- most opened ---------- */
 .ranked {

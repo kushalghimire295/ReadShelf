@@ -19,7 +19,12 @@ export type Item = {
 
 export type Session = {
   user: { sub: string; name?: string; email?: string } | null
-  mode: 'local' | 'freebuff' | 'setup'
+  mode: 'ready' | 'setup'
   database: boolean
   storage: boolean
+  /** Email codes can be delivered (or shown locally in development). */
+  email: boolean
+  google: boolean
+  /** Loopback development shows the code instead of emailing it. */
+  devCode: boolean
 }

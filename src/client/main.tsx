@@ -155,6 +155,176 @@ function Thumb({ item, big = false }: { item: Item; big?: boolean }) {
   )
 }
 
+function SignIn({ session }: { session: Session }) {
+  const [email, setEmail] = useState('')
+  const [code, setCode] = useState('')
+  const [step, setStep] = useState<'email' | 'code'>('email')
+  const [busy, setBusy] = useState(false)
+  const [devCode, setDevCode] = useState('')
+  const [error, setError] = useState(
+    () => new URLSearchParams(window.location.search).get('authError') || '',
+  )
+
+  async function sendCode(event: React.FormEvent) {
+    event.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setError('')
+    setDevCode('')
+    try {
+      const result = await request<{ ok: boolean; devCode: string | null }>(
+        '/api/auth/email',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        },
+      )
+      setStep('code')
+      setDevCode(result.devCode ?? '')
+      setCode(result.devCode ?? '')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not send the code.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function verify(event: React.FormEvent) {
+    event.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      await request<{ user: Session['user'] }>('/api/auth/email/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, code }),
+      })
+      // Reload so the app boots with the new session and its own data.
+      window.location.replace('/')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not sign in.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <main className="gate">
+      <div className="gate-card">
+        <span className="wordmark">
+          <span className="mark" aria-hidden="true" />
+          Readshelf
+        </span>
+        <h1>{step === 'email' ? 'Sign in to Readshelf.' : 'Check your email.'}</h1>
+        <p className="lede">
+          {step === 'email'
+            ? 'Your first sign-in creates the account. No password to remember.'
+            : `We sent a six-digit code to ${email}. It stays valid for ten minutes.`}
+        </p>
+
+        {step === 'email' ? (
+          <form className="signin" onSubmit={sendCode}>
+            <label className="field">
+              <span>Email</span>
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                placeholder="you@example.com"
+                value={email}
+                disabled={busy || !session.email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </label>
+            <button
+              className="primary gate-button"
+              disabled={busy || !session.email || !email.trim()}
+            >
+              {busy ? 'Sending…' : 'Email me a code'}
+            </button>
+            {!session.email && (
+              <p className="gate-note">
+                Email sign-in needs RESEND_API_KEY and EMAIL_FROM.
+              </p>
+            )}
+          </form>
+        ) : (
+          <form className="signin" onSubmit={verify}>
+            <label className="field">
+              <span>Six-digit code</span>
+              <input
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]*"
+                maxLength={6}
+                placeholder="000000"
+                className="code-input"
+                value={code}
+                disabled={busy}
+                onChange={(e) =>
+                  setCode(e.target.value.replace(/\D/g, '').slice(0, 6))
+                }
+              />
+            </label>
+            <button
+              className="primary gate-button"
+              disabled={busy || code.length !== 6}
+            >
+              {busy ? 'Checking…' : 'Sign in'}
+            </button>
+            <div className="signin-links">
+              <button type="button" className="quiet small" onClick={sendCode}>
+                Send a new code
+              </button>
+              <button
+                type="button"
+                className="quiet small"
+                onClick={() => {
+                  setStep('email')
+                  setCode('')
+                  setDevCode('')
+                  setError('')
+                }}
+              >
+                Use a different email
+              </button>
+            </div>
+          </form>
+        )}
+
+        {devCode && (
+          <p className="notice dev-code">
+            Development only — your code is <strong>{devCode}</strong>
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
+        )}
+
+        {session.google && (
+          <>
+            <p className="or-line">
+              <span>or</span>
+            </p>
+            <a className="button gate-button" href="/api/auth/google">
+              Continue with Google
+            </a>
+          </>
+        )}
+
+        <ul className="gate-points">
+          <li>Private by default — only you can open your own files.</li>
+          <li>Public reads can surface on other readers’ Home feeds.</li>
+          <li>“Most opened” ranks public reads by how often they’re opened.</li>
+        </ul>
+      </div>
+    </main>
+  )
+}
+
 function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [loaded, setLoaded] = useState(false)
@@ -472,47 +642,7 @@ function App() {
     )
 
   // The app is gated: nothing behind it renders until someone is signed in.
-  if (!session.user)
-    return (
-      <main className="gate">
-        <div className="gate-card">
-          <span className="wordmark">
-            <span className="mark" aria-hidden="true" />
-            Readshelf
-          </span>
-          <h1>Your shelf, on every device.</h1>
-          <p className="lede">
-            Keep PDFs and images private, or share them with other readers.
-            Sign in to start your shelf.
-          </p>
-          {session.mode === 'freebuff' ? (
-            <a
-              className="button gate-button"
-              href="/auth/freebuff/signin?returnTo=%2F"
-            >
-              Sign in with Freebuff
-            </a>
-          ) : (
-            <p className="gate-note">
-              Sign-in isn’t connected yet. It becomes available once this app is
-              published with an account provider.
-            </p>
-          )}
-          <p className="gate-note">
-            No new password to remember — you’ll continue with Google, GitHub
-            or Apple through Freebuff, and your first sign-in creates the
-            account.
-          </p>
-          <ul className="gate-points">
-            <li>Private by default — only you can open your own files.</li>
-            <li>Public reads can surface on other readers’ Home feeds.</li>
-            <li>
-              “Most opened” ranks public reads by how often they’re opened.
-            </li>
-          </ul>
-        </div>
-      </main>
-    )
+  if (!session.user) return <SignIn session={session} />
 
   return (
     <main>
@@ -566,8 +696,21 @@ function App() {
           >
             {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
           </button>
-          <form method="post" action="/auth/freebuff/signout">
-            <button className="quiet small">Sign out</button>
+          <form
+            method="post"
+            action="/api/auth/signout"
+            onSubmit={async (event) => {
+              // Post without leaving the page first, then reload into the gate.
+              event.preventDefault()
+              await fetch('/api/auth/signout', { method: 'POST' }).catch(
+                () => undefined,
+              )
+              window.location.replace('/')
+            }}
+          >
+            <button type="submit" className="quiet small">
+              Sign out
+            </button>
           </form>
         </div>
       </header>
@@ -576,7 +719,7 @@ function App() {
         <p className="notice">
           {session && (!session.database || !session.storage)
             ? 'Readshelf is still being set up. Uploading opens shortly.'
-            : 'Sign in with Freebuff to keep your own shelf.'}
+            : 'Sign in to keep your own shelf.'}
         </p>
       )}
       {error && (

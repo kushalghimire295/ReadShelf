@@ -10,6 +10,8 @@ shelf; anything they mark public is shown to other readers on the Home feed.
   and only readers allowed to open an item can increment it.
 - **Public** — appears on every other reader's Home feed, newest first. There
   is no percentage or sampling: public means listed.
+- **Sign-in** — passwordless. A six-digit code by email, or Google. The first
+  sign-in creates the account; there are no passwords to store.
 - **Covers** — a separate cover image can be uploaded with a document, and
   that image is used on every card and row instead of the document preview.
 - Files live in R2 (`FILES`); titles, sharing and cover references live in D1
@@ -26,10 +28,10 @@ bun run build
 ```
 
 Open the URL printed by Vite. The server binds to `0.0.0.0` and runs the Worker
-with local D1 and R2 bindings. With no auth configuration on a loopback origin,
-a single local development identity is used. That fallback never applies on a
-hosted origin or with incomplete auth config, and the interface does not label
-it — locally the app simply opens as a signed-in reader named “Reader”.
+with local D1 and R2 bindings. Sign-in works locally without any credentials:
+on a loopback origin the six-digit code is displayed on the sign-in screen
+instead of being emailed. Documents uploaded before sign-in existed belong to
+the `local-preview` owner and are adopted by the first local sign-in.
 
 ## Where things live
 
@@ -38,7 +40,10 @@ it — locally the app simply opens as a signed-in reader named “Reader”.
   Signed out, only the gate renders; the development identity bypasses it.
 - `src/client/style.css` — responsive layout: 2-up cards on phones, a wider
   auto-fill grid from tablet up.
-- `src/worker/app.ts` — `/api/feed`, `/api/items` CRUD and `/api/items/:id/file`.
+- `src/worker/app.ts` — `/api/auth/*` routes plus `/api/feed`, `/api/items`
+  CRUD, `/api/items/:id/file` and `/api/items/:id/cover`.
+- `src/worker/auth.ts` — email one-time codes, Google OAuth, and the signed
+  HttpOnly session cookie stored in D1 (`users`, `login_codes`, `sessions`).
 - `src/worker/db.ts` — the D1 `items` table and row mapping.
 - `src/shared/types.ts` — API types shared by browser and server.
 
@@ -46,7 +51,12 @@ it — locally the app simply opens as a signed-in reader named “Reader”.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/session` | current user, auth mode, database + storage readiness |
+| `GET /api/session` | current user, plus which sign-in methods are available |
+| `POST /api/auth/email` | send (or locally show) a six-digit sign-in code |
+| `POST /api/auth/email/verify` | exchange the code for a session cookie |
+| `GET /api/auth/google` | start Google OAuth |
+| `GET /api/auth/google/callback` | finish Google OAuth and set the session |
+| `POST /api/auth/signout` | revoke the session and clear the cookie |
 | `GET /api/feed` | public items from other readers, newest first |
 | `GET /api/items` | your own shelf (private and public) |
 | `POST /api/items` | multipart upload: `file`, optional `cover`, `title`, `visibility` |
@@ -62,16 +72,29 @@ an image (JPEG, PNG, WebP, GIF or AVIF) of up to 5 MB. Titles are 1–120
 characters. All queries bind parameters and scope ownership by the
 authenticated user's `sub`; mutations reject foreign origins.
 
-## Publish with Freebuff
+## Sign-in configuration
+
+Sign-in is part of the Worker; there is no third-party auth service.
+
+| Variable | Purpose |
+| --- | --- |
+| `SESSION_SECRET` | 32+ random characters. Signs session cookies. Required on any non-loopback origin. |
+| `RESEND_API_KEY` | Resend API key used to deliver email codes. |
+| `EMAIL_FROM` | Verified sender, e.g. `Readshelf <hello@yourdomain>`. |
+| `GOOGLE_CLIENT_ID` | Google OAuth client id. |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret. |
+| `APP_ORIGIN` | Canonical public origin, also the base for the Google redirect. |
+
+Register `<APP_ORIGIN>/api/auth/google/callback` as the Google redirect URI.
+Without `RESEND_API_KEY`/`EMAIL_FROM` the code is only shown on localhost; on a
+hosted origin requests fail closed instead of silently signing nobody in.
+
+## Publish
 
 1. Create/inspect the site and target preview first.
-2. `sites_enable_auth` (Sign in with Freebuff). For local login testing use the
-   dev server's loopback origin and only the returned development variables.
-3. `sites_add_storage` for D1 as `DB` **and** R2 as `FILES`.
+2. `sites_add_storage` for D1 as `DB` **and** R2 as `FILES`.
+3. Set the variables above as project secrets/variables.
 4. Build and deploy with `sites_deploy` and `deploy.json`.
-
-Sites injects `FREEBUFF_CLIENT_ID`, `FREEBUFF_ISSUER` and `APP_ORIGIN`. No
-application secret or separate cloud account is needed.
 
 ## Verify before publishing
 
@@ -79,6 +102,6 @@ application secret or separate cloud account is needed.
 round-trip, private items stay owner-only (including the file route), public
 items surface in other feeds, sharing changes take effect, opens are counted and
 ranked while private items stay out of the ranking, covers are stored, served and
-access-checked, deletion removes the row, and signed-out/foreign-origin/oversized
-requests are refused. After provisioning, verify real sign-in, refresh, sign-out
+access-checked, email codes create a session that sign-out revokes, and
+signed-out/foreign-origin/oversized requests are refused. After provisioning, verify real sign-in, refresh, sign-out
 and two accounts' isolation in a browser.

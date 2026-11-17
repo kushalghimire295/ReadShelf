@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { Miniflare } from 'miniflare'
 import { createApp } from '../src/worker/app'
-import { currentUser, type Env } from '../src/worker/auth'
+import type { Env } from '../src/worker/auth'
 
 const runtime = new Miniflare({
   workers: [
@@ -369,7 +369,7 @@ test('a separate cover image is stored, served and access-checked', async () => 
   ).toBe(200)
 })
 
-test('missing storage or database reports setup and local preview stays local', async () => {
+test('missing storage or database reports setup', async () => {
   expect(
     (
       await app.request(
@@ -388,14 +388,112 @@ test('missing storage or database reports setup and local preview stays local', 
   ).json()) as { storage: boolean }
   expect(noBucket.storage).toBe(false)
   expect(
-    await currentUser(new Request('https://app.example.test/'), {} as Env),
-  ).toBeNull()
-  expect(
-    await currentUser(new Request('http://localhost:5000/'), {
-      APP_ORIGIN: 'https://app.example.test',
-    } as Env),
-  ).toBeNull()
-  expect(
-    await currentUser(new Request('http://localhost:5000/'), {} as Env),
-  ).toMatchObject({ sub: 'local-preview' })
+    (
+      await app.request(
+        'https://app.example.test/api/feed',
+        { headers: { 'test-user': 'alice' } },
+        { ...env, DB: undefined },
+      )
+    ).status,
+  ).toBe(503)
+})
+
+test('email codes sign a reader in and sign-out revokes the session', async () => {
+  const origin = 'http://localhost:5000'
+  const local: Env = { ...env, APP_ORIGIN: origin }
+  // The default app reads the real session cookie rather than the test header.
+  const sessionApp = createApp()
+  const email = 'reader@example.test'
+  const json = (body: unknown): RequestInit => ({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify(body),
+  })
+
+  const send = await sessionApp.request(
+    `${origin}/api/auth/email`,
+    json({ email }),
+    local,
+  )
+  expect(send.status).toBe(200)
+  const { devCode } = (await send.json()) as { devCode: string }
+  expect(devCode).toMatch(/^\d{6}$/)
+
+  // A wrong code is refused, and the right one returns a session cookie.
+  const wrong = await sessionApp.request(
+    `${origin}/api/auth/email/verify`,
+    json({ email, code: '000000' }),
+    local,
+  )
+  expect(wrong.status).toBe(400)
+
+  const verify = await sessionApp.request(
+    `${origin}/api/auth/email/verify`,
+    json({ email, code: devCode }),
+    local,
+  )
+  expect(verify.status).toBe(200)
+  const setCookie = verify.headers.get('Set-Cookie') ?? ''
+  expect(setCookie).toContain('readshelf_session=')
+  expect(setCookie).toContain('HttpOnly')
+  const cookie = setCookie.split(';')[0]!
+
+  const session = await sessionApp.request(
+    `${origin}/api/session`,
+    { headers: { Cookie: cookie } },
+    local,
+  )
+  const body = (await session.json()) as {
+    user: { email: string } | null
+    email: boolean
+    devCode: boolean
+  }
+  expect(body.user?.email).toBe(email)
+  expect(body.devCode).toBe(true)
+
+  const feed = await sessionApp.request(
+    `${origin}/api/items`,
+    { headers: { Cookie: cookie } },
+    local,
+  )
+  expect(feed.status).toBe(200)
+
+  const signOut = await sessionApp.request(
+    `${origin}/api/auth/signout`,
+    { method: 'POST', headers: { Origin: origin, Cookie: cookie } },
+    local,
+  )
+  expect(signOut.status).toBe(303)
+  const after = await sessionApp.request(
+    `${origin}/api/session`,
+    { headers: { Cookie: cookie } },
+    local,
+  )
+  expect(((await after.json()) as { user: unknown }).user).toBeNull()
+})
+
+test('email sign-in refuses cross-origin and invalid addresses', async () => {
+  const origin = 'http://localhost:5000'
+  const local: Env = { ...env, APP_ORIGIN: origin }
+  const crossOrigin = await app.request(
+    `${origin}/api/auth/email`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://evil.test' },
+      body: JSON.stringify({ email: 'reader@example.test' }),
+    },
+    local,
+  )
+  expect(crossOrigin.status).toBe(403)
+
+  const invalid = await app.request(
+    `${origin}/api/auth/email`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: origin },
+      body: JSON.stringify({ email: 'not-an-email' }),
+    },
+    local,
+  )
+  expect(invalid.status).toBe(400)
 })

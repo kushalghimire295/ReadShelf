@@ -1,0 +1,16 @@
+# Copy to .dev.vars to enable real email and Google sign-in locally.
+# Without these, localhost shows the six-digit code on the sign-in screen.
+
+# 32+ random characters. Required on any hosted origin.
+# SESSION_SECRET=change-me-to-a-long-random-string
+
+# Email codes
+# RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxx
+# EMAIL_FROM=Readshelf <hello@yourdomain>
+
+# Google OAuth (redirect URI: <APP_ORIGIN>/api/auth/google/callback)
+# GOOGLE_CLIENT_ID=xxxxxxxx.apps.googleusercontent.com
+# GOOGLE_CLIENT_SECRET=xxxxxxxxxxxxxxxx
+
+# Canonical origin for this machine, used to build the Google redirect.
+# APP_ORIGIN=http://localhost:5174
