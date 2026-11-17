@@ -635,7 +635,12 @@ button.pill {
 button.pill:hover {
   border-color: var(--line-strong);
 }
-.add-delete {
+.adds-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.icon-btn {
   flex: none;
   display: grid;
   place-items: center;
@@ -644,7 +649,7 @@ button.pill:hover {
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: transparent;
+  background: var(--surface);
   color: var(--faint);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -653,14 +658,71 @@ button.pill:hover {
     border-color 0.15s ease,
     background 0.15s ease;
 }
-.add-delete svg {
+.icon-btn svg {
   width: 16px;
   height: 16px;
 }
-.add-delete:hover {
+.icon-btn:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.icon-btn.on {
   color: var(--danger);
   border-color: var(--danger);
   background: var(--control);
+}
+/* Selection mode: the whole row becomes a checkbox row. */
+.add-row.select {
+  width: 100%;
+  padding: 7px 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.add-row.select.on {
+  background: var(--control);
+}
+.pick {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--surface);
+}
+.select.on .pick {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+}
+.select-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.select-count {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.select-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .danger-fill {
   padding: 7px 13px;

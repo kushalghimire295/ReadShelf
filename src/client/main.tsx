@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Item, Session, Visibility } from '../shared/types'
 import './style.css'
@@ -167,8 +167,11 @@ function App() {
   // The document whose sharing is being confirmed in the dialog.
   const [pending, setPending] = useState<Item | null>(null)
   const [switching, setSwitching] = useState(false)
-  // The document being removed after confirmation in My Adds.
-  const [deleting, setDeleting] = useState<Item | null>(null)
+  // Selection and deletion in My Adds.
+  const [selecting, setSelecting] = useState(false)
+  const [selected, setSelected] = useState<string[]>([])
+  const [sortAsc, setSortAsc] = useState(true)
+  const [confirmRemove, setConfirmRemove] = useState<string[] | null>(null)
   const [removing, setRemoving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -185,6 +188,17 @@ function App() {
 
   const enabled = Boolean(
     loaded && session?.user && session.database && session.storage,
+  )
+
+  // My Adds is alphabetical; the toggle flips the direction.
+  const shelfSorted = useMemo(
+    () =>
+      [...shelf].sort(
+        (a, b) =>
+          a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }) *
+          (sortAsc ? 1 : -1),
+      ),
+    [shelf, sortAsc],
   )
 
   useEffect(() => {
@@ -259,12 +273,12 @@ function App() {
   }, [loadFeed, loadPopular, loadShelf])
 
   useEffect(() => {
-    if (!reader && !pending && !deleting) return
+    if (!reader && !pending && !confirmRemove) return
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setReader(null)
         setPending(null)
-        setDeleting(null)
+        setConfirmRemove(null)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -273,7 +287,7 @@ function App() {
       window.removeEventListener('keydown', onKey)
       document.body.style.overflow = ''
     }
-  }, [reader, pending, deleting])
+  }, [reader, pending, confirmRemove])
 
   async function upload(event: React.FormEvent) {
     event.preventDefault()
@@ -356,27 +370,48 @@ function App() {
       )
   }
 
-  async function remove(item: Item) {
+  async function removeMany(ids: string[]) {
+    if (!ids.length) return
     setError('')
     setNotice('')
-    try {
-      await request(`/api/items/${item.id}`, { method: 'DELETE' })
-      setShelf((current) => current.filter((entry) => entry.id !== item.id))
-      setFeed((current) => current.filter((entry) => entry.id !== item.id))
-      setPopular((current) => current.filter((entry) => entry.id !== item.id))
-      if (reader?.id === item.id) setReader(null)
-      setNotice('Deleted from your shelf.')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not delete that read.')
+    const failed: string[] = []
+    // Sequential on purpose: a bulk delete should not hammer D1 and R2 at once.
+    for (const id of ids) {
+      try {
+        await request(`/api/items/${id}`, { method: 'DELETE' })
+      } catch {
+        failed.push(id)
+      }
     }
+    const done = ids.filter((id) => !failed.includes(id))
+    if (done.length) {
+      const gone = new Set(done)
+      setShelf((current) => current.filter((entry) => !gone.has(entry.id)))
+      setFeed((current) => current.filter((entry) => !gone.has(entry.id)))
+      setPopular((current) => current.filter((entry) => !gone.has(entry.id)))
+      setSelected((current) => current.filter((id) => !gone.has(id)))
+      if (reader && gone.has(reader.id)) setReader(null)
+      setNotice(
+        done.length === 1
+          ? 'Deleted from your shelf.'
+          : `Deleted ${done.length} reads.`,
+      )
+      if (!failed.length) setSelecting(false)
+    }
+    if (failed.length)
+      setError(
+        failed.length === 1
+          ? 'One read could not be deleted. Please try again.'
+          : `${failed.length} reads could not be deleted. Please try again.`,
+      )
   }
 
-  async function confirmDelete() {
-    if (!deleting) return
+  async function runDelete() {
+    if (!confirmRemove) return
     setRemoving(true)
-    await remove(deleting)
+    await removeMany(confirmRemove)
     setRemoving(false)
-    setDeleting(null)
+    setConfirmRemove(null)
   }
 
   /** Keep every list in step with a freshly counted item. */
@@ -681,7 +716,54 @@ function App() {
         <section className="page" aria-labelledby="adds-title">
           <div className="page-head">
             <h1 id="adds-title">My Adds</h1>
-            {shelf.length ? <span className="count">{shelf.length}</span> : null}
+            <div className="adds-tools">
+              {shelf.length ? (
+                <button
+                  type="button"
+                  className="quiet small"
+                  title={sortAsc ? 'Sorted A–Z' : 'Sorted Z–A'}
+                  aria-label={
+                    sortAsc
+                      ? 'Sorted A to Z. Switch to Z to A'
+                      : 'Sorted Z to A. Switch to A to Z'
+                  }
+                  onClick={() => setSortAsc((value) => !value)}
+                >
+                  {sortAsc ? 'A–Z' : 'Z–A'}
+                </button>
+              ) : null}
+              {shelf.length ? <span className="count">{shelf.length}</span> : null}
+              {shelf.length ? (
+                <button
+                  type="button"
+                  className={`icon-btn${selecting ? ' on' : ''}`}
+                  aria-pressed={selecting}
+                  aria-label={
+                    selecting ? 'Stop selecting reads' : 'Select reads to delete'
+                  }
+                  title={selecting ? 'Done selecting' : 'Delete reads'}
+                  onClick={() => {
+                    setSelecting((value) => !value)
+                    setSelected([])
+                  }}
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={1.7}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M4.5 7h15" />
+                    <path d="M9.5 7V4.9h5V7" />
+                    <path d="M6.6 7l.8 12.1h9.2L17.4 7" />
+                    <path d="M10.4 10.8v5M13.6 10.8v5" />
+                  </svg>
+                </button>
+              ) : null}
+            </div>
           </div>
 
           <section className="my-adds" aria-labelledby="adds-list-title">
@@ -691,65 +773,123 @@ function App() {
             {!shelf.length ? (
               <p className="my-adds-empty">Nothing added yet.</p>
             ) : (
-              <ul className="add-list">
-                {shelf.map((item) => (
-                  <li key={item.id}>
-                    <div className="add-row">
+              <>
+                <ul className="add-list">
+                  {shelfSorted.map((item) => {
+                    const picked = selected.includes(item.id)
+                    return (
+                      <li key={item.id}>
+                        {selecting ? (
+                          <button
+                            type="button"
+                            className={`add-row select${picked ? ' on' : ''}`}
+                            aria-pressed={picked}
+                            aria-label={`Select ${item.title}`}
+                            onClick={() =>
+                              setSelected((current) =>
+                                current.includes(item.id)
+                                  ? current.filter((id) => id !== item.id)
+                                  : [...current, item.id],
+                              )
+                            }
+                          >
+                            <span className="pick" aria-hidden="true">
+                              {picked ? '✓' : ''}
+                            </span>
+                            <Thumb item={item} />
+                            <span className="add-body">
+                              <span className="add-title">{item.title}</span>
+                              <span className="add-meta">
+                                {item.kind === 'pdf' ? 'PDF' : 'Image'} ·{' '}
+                                {formatSize(item.size)} · {item.opens}{' '}
+                                {item.opens === 1 ? 'open' : 'opens'}
+                              </span>
+                            </span>
+                            <span className={`pill ${item.visibility}`}>
+                              {item.visibility === 'private'
+                                ? 'Private'
+                                : 'Public'}
+                            </span>
+                          </button>
+                        ) : (
+                          <div className="add-row">
+                            <button
+                              type="button"
+                              className="add-open"
+                              aria-label={`Open ${item.title}`}
+                              onClick={() => openItem(item)}
+                            >
+                              <Thumb item={item} />
+                              <span className="add-body">
+                                <span className="add-title">{item.title}</span>
+                                <span className="add-meta">
+                                  {item.kind === 'pdf' ? 'PDF' : 'Image'} ·{' '}
+                                  {formatSize(item.size)} · {item.opens}{' '}
+                                  {item.opens === 1 ? 'open' : 'opens'}
+                                </span>
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`pill act ${item.visibility}`}
+                              aria-label={`Change sharing for ${item.title}`}
+                              title={
+                                item.visibility === 'private'
+                                  ? 'Make public'
+                                  : 'Make private'
+                              }
+                              onClick={() => setPending(item)}
+                            >
+                              {item.visibility === 'private'
+                                ? 'Private'
+                                : 'Public'}
+                            </button>
+                          </div>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+                {selecting && (
+                  <div className="select-bar">
+                    <span className="select-count">
+                      {selected.length} selected
+                    </span>
+                    <div className="select-actions">
                       <button
                         type="button"
-                        className="add-open"
-                        aria-label={`Open ${item.title}`}
-                        onClick={() => openItem(item)}
+                        className="small danger-fill"
+                        disabled={!selected.length || removing}
+                        onClick={() => setConfirmRemove(selected)}
                       >
-                        <Thumb item={item} />
-                        <span className="add-body">
-                          <span className="add-title">{item.title}</span>
-                          <span className="add-meta">
-                            {item.kind === 'pdf' ? 'PDF' : 'Image'} ·{' '}
-                            {formatSize(item.size)} · {item.opens}{' '}
-                            {item.opens === 1 ? 'open' : 'opens'}
-                          </span>
-                        </span>
+                        Delete selected
                       </button>
                       <button
                         type="button"
-                        className={`pill act ${item.visibility}`}
-                        aria-label={`Change sharing for ${item.title}`}
-                        title={
-                          item.visibility === 'private'
-                            ? 'Make public'
-                            : 'Make private'
+                        className="quiet small"
+                        disabled={removing}
+                        onClick={() =>
+                          setConfirmRemove(
+                            shelfSorted.map((entry) => entry.id),
+                          )
                         }
-                        onClick={() => setPending(item)}
                       >
-                        {item.visibility === 'private' ? 'Private' : 'Public'}
+                        Delete all
                       </button>
                       <button
                         type="button"
-                        className="add-delete"
-                        aria-label={`Delete ${item.title}`}
-                        title="Delete"
-                        onClick={() => setDeleting(item)}
+                        className="quiet small"
+                        onClick={() => {
+                          setSelecting(false)
+                          setSelected([])
+                        }}
                       >
-                        <svg
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth={1.7}
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          aria-hidden="true"
-                        >
-                          <path d="M4.5 7h15" />
-                          <path d="M9.5 7V4.9h5V7" />
-                          <path d="M6.6 7l.8 12.1h9.2L17.4 7" />
-                          <path d="M10.4 10.8v5M13.6 10.8v5" />
-                        </svg>
+                        Cancel
                       </button>
                     </div>
-                  </li>
-                ))}
-              </ul>
+                  </div>
+                )}
+              </>
             )}
           </section>
         </section>
@@ -950,7 +1090,7 @@ function App() {
         </div>
       )}
 
-      {deleting && (
+      {confirmRemove && (
         <div
           className="modal"
           role="dialog"
@@ -958,16 +1098,22 @@ function App() {
           aria-labelledby="delete-title"
         >
           <div className="modal-card">
-            <h2 id="delete-title">Delete this read?</h2>
+            <h2 id="delete-title">
+              {confirmRemove.length === 1
+                ? 'Delete this read?'
+                : `Delete ${confirmRemove.length} reads?`}
+            </h2>
             <p className="modal-text">
-              <strong>{deleting.title}</strong> will be removed from your shelf,
-              Home and Most opened. This cannot be undone.
+              {confirmRemove.length === 1
+                ? 'This read will be removed'
+                : `These ${confirmRemove.length} reads will be removed`}{' '}
+              from your shelf, Home and Most opened. This cannot be undone.
             </p>
             <div className="modal-actions">
               <button
                 type="button"
                 className="quiet small"
-                onClick={() => setDeleting(null)}
+                onClick={() => setConfirmRemove(null)}
                 disabled={removing}
               >
                 Cancel
@@ -975,10 +1121,14 @@ function App() {
               <button
                 type="button"
                 className="small danger-fill"
-                onClick={() => void confirmDelete()}
+                onClick={() => void runDelete()}
                 disabled={removing}
               >
-                {removing ? 'Deleting…' : 'Delete'}
+                {removing
+                  ? 'Deleting…'
+                  : confirmRemove.length === 1
+                    ? 'Delete'
+                    : 'Delete all'}
               </button>
             </div>
           </div>
