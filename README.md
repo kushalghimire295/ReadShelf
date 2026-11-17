@@ -8,11 +8,8 @@ shelf; anything they mark public is shown to other readers on the Home feed.
 - **Most opened** — an all-time ranking of public reads by how many times
   they have been opened. Private items are neither counted nor listed there,
   and only readers allowed to open an item can increment it.
-- **Public** — enters the Home draw. Home shows up to 12 public reads picked at
-  random from everyone else's public shares, so each read's chance of appearing
-  is 12 ÷ (total public shares) — 100% while there are 12 or fewer, then
-  proportionally smaller as the shared shelf grows. Private reads never enter
-  the draw.
+- **Public** — appears on every other reader's Home feed, newest first. Private
+  reads never appear there.
 - **Sign-in** — passwordless. A six-digit code by email, or Google. The first
   sign-in creates the account; there are no passwords to store.
 - **Covers** — a separate cover image can be uploaded with a document, and
@@ -60,7 +57,7 @@ the `local-preview` owner and are adopted by the first local sign-in.
 | `GET /api/auth/google` | start Google OAuth |
 | `GET /api/auth/google/callback` | finish Google OAuth and set the session |
 | `POST /api/auth/signout` | revoke the session and clear the cookie |
-| `GET /api/feed` | random draw of up to 12 public reads from other readers, plus the total count |
+| `GET /api/feed` | public items from other readers, newest first |
 | `GET /api/items` | your own shelf (private and public) |
 | `POST /api/items` | multipart upload: `file`, optional `cover`, `title`, `visibility` |
 | `PATCH /api/items/:id` | rename or change visibility |

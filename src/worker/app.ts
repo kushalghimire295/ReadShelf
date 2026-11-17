@@ -30,8 +30,6 @@ type Authenticate = (request: Request, env: Env) => Promise<AuthUser | null>
 const MAX_UPLOAD = 15 * 1024 * 1024
 const MAX_COVER = 5 * 1024 * 1024
 const MAX_TITLE = 120
-/** How many public reads Home draws from, however large the public shelf is. */
-const FEED_SIZE = 12
 const COLUMNS =
   'id, owner_sub, owner_name, title, kind, mime, size, object_key, cover_key, cover_mime, visibility, reach, opens, created_at, updated_at'
 
@@ -213,33 +211,17 @@ export function createApp(authenticate: Authenticate = currentUser) {
   app.use('/api/items', guard)
   app.use('/api/items/*', guard)
 
-  // Home is a draw, not a full listing: each public read has the same chance
-  // of being picked, and that chance shrinks as the shelf of public shares
-  // grows, so the feed stays a readable size however many reads exist.
   app.get('/api/feed', async (c) => {
-    const viewer = c.get('user').sub
-    const total = await c
-      .get('db')
-      .prepare(
-        `SELECT COUNT(*) AS total FROM items WHERE visibility = 'public' AND owner_sub <> ?`,
-      )
-      .bind(viewer)
-      .first<{ total: number }>()
-    const slots = Math.min(total?.total ?? 0, FEED_SIZE)
-    if (!slots) return c.json({ items: [], total: total?.total ?? 0 })
-
     const rows = await c
       .get('db')
       .prepare(
-        `SELECT ${COLUMNS} FROM items WHERE visibility = 'public' AND owner_sub <> ? ORDER BY RANDOM() LIMIT ?`,
+        `SELECT ${COLUMNS} FROM items WHERE visibility = 'public' AND owner_sub <> ? ORDER BY created_at DESC LIMIT 60`,
       )
-      .bind(viewer, slots)
+      .bind(c.get('user').sub)
       .all<ItemRow>()
-    // Newest first among the reads that were drawn this time.
-    const items = rows.results
-      .map((row) => mapItem(row, viewer))
-      .sort((a, b) => b.createdAt - a.createdAt)
-    return c.json({ items, total: total?.total ?? 0 })
+    return c.json({
+      items: rows.results.map((row) => mapItem(row, c.get('user').sub)),
+    })
   })
 
   // All-time ranking. Private items never appear here, and only public opens
