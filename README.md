@@ -80,14 +80,16 @@ Sign-in is part of the Worker; there is no third-party auth service.
 | --- | --- |
 | `SESSION_SECRET` | 32+ random characters. Signs session cookies. Required on any non-loopback origin. |
 | `RESEND_API_KEY` | Resend API key used to deliver email codes. |
+| `SENDGRID_API_KEY` | Alternative to Resend; used when Resend is unset. |
 | `EMAIL_FROM` | Verified sender, e.g. `Readshelf <hello@yourdomain>`. |
 | `GOOGLE_CLIENT_ID` | Google OAuth client id. |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret. |
 | `APP_ORIGIN` | Canonical public origin, also the base for the Google redirect. |
 
 Register `<APP_ORIGIN>/api/auth/google/callback` as the Google redirect URI.
-Without `RESEND_API_KEY`/`EMAIL_FROM` the code is only shown on localhost; on a
-hosted origin requests fail closed instead of silently signing nobody in.
+With a provider key and `EMAIL_FROM` the six-digit code is emailed and nothing
+is shown on screen. Without them the code is only shown on localhost; a hosted
+origin refuses the request instead of silently signing nobody in.
 
 ## Publish
 

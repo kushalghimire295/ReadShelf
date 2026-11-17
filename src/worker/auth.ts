@@ -26,6 +26,9 @@ export type Env = {
   GOOGLE_CLIENT_SECRET?: string
   /** Resend API key for email codes, with a verified sender. */
   RESEND_API_KEY?: string
+  /** SendGrid API key, used when Resend is not configured. */
+  SENDGRID_API_KEY?: string
+  /** Verified sender, e.g. `Readshelf <hello@yourdomain>`. */
   EMAIL_FROM?: string
 }
 
@@ -60,10 +63,12 @@ export function googleEnabled(env: Env): boolean {
 }
 
 export function emailConfigured(env: Env): boolean {
-  return Boolean(env.RESEND_API_KEY && env.EMAIL_FROM)
+  return Boolean(
+    (env.RESEND_API_KEY || env.SENDGRID_API_KEY) && env.EMAIL_FROM,
+  )
 }
 
-/** Local development may show the code on screen instead of sending it. */
+/** Localhost may show the code on screen only while no provider is set. */
 export function allowsDevCode(request: Request, env: Env): boolean {
   return isLoopback(request) && !emailConfigured(env)
 }
@@ -305,26 +310,52 @@ async function sendCodeEmail(
   email: string,
   code: string,
 ): Promise<boolean> {
-  if (!env.RESEND_API_KEY || !env.EMAIL_FROM) return false
+  if (!env.EMAIL_FROM) return false
+  const subject = `Your Readshelf sign-in code: ${code}`
+  const text = `Your Readshelf code is ${code}. It expires in 10 minutes.`
+  const html = `<p>Your Readshelf code is</p><p style="font-size:28px;letter-spacing:6px;font-weight:700">${code}</p><p>It expires in 10 minutes. If you didn't ask for it, ignore this email.</p>`
+
   try {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: env.EMAIL_FROM,
-        to: email,
-        subject: `Your Readshelf sign-in code: ${code}`,
-        text: `Your Readshelf code is ${code}. It expires in 10 minutes.`,
-        html: `<p>Your Readshelf code is</p><p style="font-size:28px;letter-spacing:6px;font-weight:700">${code}</p><p>It expires in 10 minutes. If you didn't ask for it, ignore this email.</p>`,
-      }),
-    })
-    return response.ok
+    if (env.RESEND_API_KEY) {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ from: env.EMAIL_FROM, to: email, subject, text, html }),
+      })
+      return response.ok
+    }
+    if (env.SENDGRID_API_KEY) {
+      const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.SENDGRID_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email }] }],
+          from: { email: senderAddress(env.EMAIL_FROM) },
+          subject,
+          content: [
+            { type: 'text/plain', value: text },
+            { type: 'text/html', value: html },
+          ],
+        }),
+      })
+      return response.ok
+    }
   } catch {
     return false
   }
+  return false
+}
+
+/** Accepts both `Name <mail@host>` and a bare address. */
+function senderAddress(from: string): string {
+  const match = from.match(/<([^>]+)>/)
+  return (match?.[1] || from).trim()
 }
 
 type AuthStatus = 400 | 429 | 503
@@ -379,7 +410,16 @@ export async function startEmailCode(
     .bind(email, await sha256(`${email}:${code}:${secret}`), now, now + CODE_TTL)
     .run()
 
-  if (await sendCodeEmail(env, email, code)) return { ok: true }
+  if (emailConfigured(env)) {
+    if (await sendCodeEmail(env, email, code)) return { ok: true }
+    // A configured provider that fails must not leak a fallback code.
+    await db.prepare('DELETE FROM login_codes WHERE email = ?').bind(email).run()
+    return {
+      ok: false,
+      status: 503,
+      error: 'We could not send that email. Please try again.',
+    }
+  }
   if (allowsDevCode(request, env)) return { ok: true, devCode: code }
   await db.prepare('DELETE FROM login_codes WHERE email = ?').bind(email).run()
   return {

@@ -472,6 +472,27 @@ test('email codes sign a reader in and sign-out revokes the session', async () =
   expect(((await after.json()) as { user: unknown }).user).toBeNull()
 })
 
+test('email sign-in fails closed on a hosted origin without a provider', async () => {
+  const origin = 'https://app.example.test'
+  const hosted: Env = {
+    ...env,
+    APP_ORIGIN: origin,
+    SESSION_SECRET: 'test-secret-that-is-long-enough',
+  }
+  const response = await createApp().request(
+    `${origin}/api/auth/email`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: origin },
+      body: JSON.stringify({ email: 'hosted@example.test' }),
+    },
+    hosted,
+  )
+  expect(response.status).toBe(503)
+  const body = (await response.json()) as { devCode?: string }
+  expect(body.devCode).toBeUndefined()
+})
+
 test('email sign-in refuses cross-origin and invalid addresses', async () => {
   const origin = 'http://localhost:5000'
   const local: Env = { ...env, APP_ORIGIN: origin }

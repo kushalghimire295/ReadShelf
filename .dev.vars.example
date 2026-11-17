@@ -4,8 +4,9 @@
 # 32+ random characters. Required on any hosted origin.
 # SESSION_SECRET=change-me-to-a-long-random-string
 
-# Email codes
+# Email codes (either provider; codes are emailed, not shown, once set)
 # RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxx
+# SENDGRID_API_KEY=SG.xxxxxxxxxxxxxxxxxxxxxx
 # EMAIL_FROM=Readshelf <hello@yourdomain>
 
 # Google OAuth (redirect URI: <APP_ORIGIN>/api/auth/google/callback)
