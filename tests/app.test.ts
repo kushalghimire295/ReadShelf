@@ -472,6 +472,31 @@ test('email codes sign a reader in and sign-out revokes the session', async () =
   expect(((await after.json()) as { user: unknown }).user).toBeNull()
 })
 
+test('home draws a bounded random sample of public reads', async () => {
+  for (let index = 0; index < 14; index += 1)
+    expect((await upload({ title: `Sample ${index}`, user: 'carol' })).status).toBe(
+      201,
+    )
+
+  const first = (await (await call('/api/feed', 'dave')).json()) as {
+    items: { id: string }[]
+    total: number
+  }
+  expect(first.total).toBeGreaterThanOrEqual(14)
+  expect(first.items).toHaveLength(12)
+  expect(new Set(first.items.map((entry) => entry.id)).size).toBe(12)
+
+  // Each request is a fresh draw, so the sample is not frozen.
+  const samples = new Set<string>()
+  for (let index = 0; index < 4; index += 1) {
+    const page = (await (await call('/api/feed', 'dave')).json()) as {
+      items: { id: string }[]
+    }
+    samples.add(page.items.map((entry) => entry.id).sort().join(','))
+  }
+  expect(samples.size).toBeGreaterThan(1)
+})
+
 test('email sign-in refuses cross-origin and invalid addresses', async () => {
   const origin = 'http://localhost:5000'
   const local: Env = { ...env, APP_ORIGIN: origin }
