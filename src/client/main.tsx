@@ -227,13 +227,13 @@ function SignIn({ session }: { session: Session }) {
                 autoComplete="email"
                 placeholder="you@example.com"
                 value={email}
-                disabled={busy || !session.email}
+                disabled={busy}
                 onChange={(e) => setEmail(e.target.value)}
               />
             </label>
             <button
               className="primary gate-button"
-              disabled={busy || !session.email || !email.trim()}
+              disabled={busy || !email.trim()}
             >
               {busy ? 'Sending…' : 'Email me a code'}
             </button>
