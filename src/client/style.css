@@ -1172,10 +1172,6 @@ button.pill:hover {
   height: 1px;
   background: var(--line);
 }
-.dev-code {
-  margin-top: 14px;
-  font-size: 13px;
-}
 
 /* ---------- most opened ---------- */
 .ranked {

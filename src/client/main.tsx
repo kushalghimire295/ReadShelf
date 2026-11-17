@@ -160,7 +160,6 @@ function SignIn({ session }: { session: Session }) {
   const [code, setCode] = useState('')
   const [step, setStep] = useState<'email' | 'code'>('email')
   const [busy, setBusy] = useState(false)
-  const [devCode, setDevCode] = useState('')
   const [error, setError] = useState(
     () => new URLSearchParams(window.location.search).get('authError') || '',
   )
@@ -170,19 +169,14 @@ function SignIn({ session }: { session: Session }) {
     if (busy) return
     setBusy(true)
     setError('')
-    setDevCode('')
     try {
-      const result = await request<{ ok: boolean; devCode: string | null }>(
-        '/api/auth/email',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email }),
-        },
-      )
+      await request<{ ok: boolean }>('/api/auth/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
       setStep('code')
-      setDevCode(result.devCode ?? '')
-      setCode(result.devCode ?? '')
+      setCode('')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not send the code.')
     } finally {
@@ -245,7 +239,7 @@ function SignIn({ session }: { session: Session }) {
             </button>
             {!session.email && (
               <p className="gate-note">
-                Email sign-in needs RESEND_API_KEY and EMAIL_FROM.
+                Email sign-in is not configured on this site yet.
               </p>
             )}
           </form>
@@ -283,7 +277,6 @@ function SignIn({ session }: { session: Session }) {
                 onClick={() => {
                   setStep('email')
                   setCode('')
-                  setDevCode('')
                   setError('')
                 }}
               >
@@ -293,11 +286,6 @@ function SignIn({ session }: { session: Session }) {
           </form>
         )}
 
-        {devCode && (
-          <p className="notice dev-code">
-            Development only — your code is <strong>{devCode}</strong>
-          </p>
-        )}
         {error && (
           <p role="alert" className="error">
             {error}

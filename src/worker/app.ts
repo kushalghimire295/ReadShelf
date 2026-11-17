@@ -2,7 +2,6 @@ import { Hono, type Handler } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import type { ItemKind } from '../shared/types'
 import {
-  allowsDevCode,
   appOrigin,
   clearSessionCookie,
   clearStateCookie,
@@ -107,9 +106,8 @@ export function createApp(authenticate: Authenticate = currentUser) {
       mode: 'ready',
       database: Boolean(c.env.DB),
       storage: Boolean(c.env.FILES),
-      email: emailConfigured(c.env) || allowsDevCode(c.req.raw, c.env),
+      email: emailConfigured(c.env),
       google: googleEnabled(c.env),
-      devCode: allowsDevCode(c.req.raw, c.env),
     }),
   )
 
@@ -132,7 +130,7 @@ export function createApp(authenticate: Authenticate = currentUser) {
       c.env,
     )
     if (!result.ok) return c.json({ error: result.error }, result.status)
-    return c.json({ ok: true, devCode: result.devCode ?? null })
+    return c.json({ ok: true })
   })
 
   app.post('/api/auth/email/verify', authGuard, async (c) => {

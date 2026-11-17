@@ -22,9 +22,7 @@ export type Session = {
   mode: 'ready' | 'setup'
   database: boolean
   storage: boolean
-  /** Email codes can be delivered (or shown locally in development). */
+  /** A provider is configured, so codes can actually be emailed. */
   email: boolean
   google: boolean
-  /** Loopback development shows the code instead of emailing it. */
-  devCode: boolean
 }

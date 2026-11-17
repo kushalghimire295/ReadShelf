@@ -28,10 +28,10 @@ bun run build
 ```
 
 Open the URL printed by Vite. The server binds to `0.0.0.0` and runs the Worker
-with local D1 and R2 bindings. Sign-in works locally without any credentials:
-on a loopback origin the six-digit code is displayed on the sign-in screen
-instead of being emailed. Documents uploaded before sign-in existed belong to
-the `local-preview` owner and are adopted by the first local sign-in.
+with local D1 and R2 bindings. Sign-in codes are only ever delivered by email,
+so a local run needs an email provider key (see below) before anyone can sign
+in. Documents uploaded before sign-in existed belong to the `local-preview`
+owner and are adopted by the first sign-in on that machine.
 
 ## Where things live
 
@@ -87,9 +87,9 @@ Sign-in is part of the Worker; there is no third-party auth service.
 | `APP_ORIGIN` | Canonical public origin, also the base for the Google redirect. |
 
 Register `<APP_ORIGIN>/api/auth/google/callback` as the Google redirect URI.
-With a provider key and `EMAIL_FROM` the six-digit code is emailed and nothing
-is shown on screen. Without them the code is only shown on localhost; a hosted
-origin refuses the request instead of silently signing nobody in.
+Codes are never returned to the browser: with a provider key and `EMAIL_FROM`
+the six-digit code is emailed and nothing is shown on screen. Without them the
+request is refused with “Email sign-in is not set up yet”, on every origin.
 
 ## Publish
 

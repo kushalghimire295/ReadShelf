@@ -398,9 +398,14 @@ test('missing storage or database reports setup', async () => {
   ).toBe(503)
 })
 
-test('email codes sign a reader in and sign-out revokes the session', async () => {
+test('email codes are emailed and sign a reader in', async () => {
   const origin = 'http://localhost:5000'
-  const local: Env = { ...env, APP_ORIGIN: origin }
+  const local: Env = {
+    ...env,
+    APP_ORIGIN: origin,
+    RESEND_API_KEY: 're_test',
+    EMAIL_FROM: 'Readshelf <no-reply@example.test>',
+  }
   // The default app reads the real session cookie rather than the test header.
   const sessionApp = createApp()
   const email = 'reader@example.test'
@@ -410,66 +415,107 @@ test('email codes sign a reader in and sign-out revokes the session', async () =
     body: JSON.stringify(body),
   })
 
-  const send = await sessionApp.request(
-    `${origin}/api/auth/email`,
-    json({ email }),
-    local,
-  )
-  expect(send.status).toBe(200)
-  const { devCode } = (await send.json()) as { devCode: string }
-  expect(devCode).toMatch(/^\d{6}$/)
+  // Stand in for Resend and capture the code the way a mail client would.
+  const realFetch = globalThis.fetch.bind(globalThis)
+  let sentCode = ''
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+    if (url.startsWith('https://api.resend.com/')) {
+      const payload = JSON.parse(String(init?.body ?? '{}')) as { text?: string }
+      sentCode = payload.text?.match(/\b(\d{6})\b/)?.[1] ?? ''
+      return new Response('{"id":"test"}', { status: 200 })
+    }
+    return realFetch(input as RequestInfo, init)
+  }) as typeof fetch
 
-  // A wrong code is refused, and the right one returns a session cookie.
-  const wrong = await sessionApp.request(
-    `${origin}/api/auth/email/verify`,
-    json({ email, code: '000000' }),
-    local,
-  )
-  expect(wrong.status).toBe(400)
+  try {
+    const send = await sessionApp.request(
+      `${origin}/api/auth/email`,
+      json({ email }),
+      local,
+    )
+    expect(send.status).toBe(200)
+    const sent = (await send.json()) as { devCode?: string }
+    // Nothing that could complete sign-in is ever sent to the browser.
+    expect(sent.devCode).toBeUndefined()
+    expect(JSON.stringify(sent)).not.toContain(sentCode)
+    expect(sentCode).toMatch(/^\d{6}$/)
 
-  const verify = await sessionApp.request(
-    `${origin}/api/auth/email/verify`,
-    json({ email, code: devCode }),
-    local,
-  )
-  expect(verify.status).toBe(200)
-  const setCookie = verify.headers.get('Set-Cookie') ?? ''
-  expect(setCookie).toContain('readshelf_session=')
-  expect(setCookie).toContain('HttpOnly')
-  const cookie = setCookie.split(';')[0]!
+    // A wrong code is refused, and the emailed one returns a session cookie.
+    const wrong = await sessionApp.request(
+      `${origin}/api/auth/email/verify`,
+      json({ email, code: '000000' }),
+      local,
+    )
+    expect(wrong.status).toBe(400)
 
-  const session = await sessionApp.request(
-    `${origin}/api/session`,
-    { headers: { Cookie: cookie } },
-    local,
-  )
-  const body = (await session.json()) as {
-    user: { email: string } | null
-    email: boolean
-    devCode: boolean
+    const verify = await sessionApp.request(
+      `${origin}/api/auth/email/verify`,
+      json({ email, code: sentCode }),
+      local,
+    )
+    expect(verify.status).toBe(200)
+    const setCookie = verify.headers.get('Set-Cookie') ?? ''
+    expect(setCookie).toContain('readshelf_session=')
+    expect(setCookie).toContain('HttpOnly')
+    const cookie = setCookie.split(';')[0]!
+
+    const session = await sessionApp.request(
+      `${origin}/api/session`,
+      { headers: { Cookie: cookie } },
+      local,
+    )
+    const body = (await session.json()) as {
+      user: { email: string } | null
+      email: boolean
+    }
+    expect(body.user?.email).toBe(email)
+    expect(body.email).toBe(true)
+
+    const shelf = await sessionApp.request(
+      `${origin}/api/items`,
+      { headers: { Cookie: cookie } },
+      local,
+    )
+    expect(shelf.status).toBe(200)
+
+    const signOut = await sessionApp.request(
+      `${origin}/api/auth/signout`,
+      { method: 'POST', headers: { Origin: origin, Cookie: cookie } },
+      local,
+    )
+    expect(signOut.status).toBe(303)
+    const after = await sessionApp.request(
+      `${origin}/api/session`,
+      { headers: { Cookie: cookie } },
+      local,
+    )
+    expect(((await after.json()) as { user: unknown }).user).toBeNull()
+  } finally {
+    globalThis.fetch = realFetch
   }
-  expect(body.user?.email).toBe(email)
-  expect(body.devCode).toBe(true)
+})
 
-  const feed = await sessionApp.request(
-    `${origin}/api/items`,
-    { headers: { Cookie: cookie } },
+test('a missing email provider never returns a usable code', async () => {
+  const origin = 'http://localhost:5000'
+  const local: Env = { ...env, APP_ORIGIN: origin }
+  const response = await createApp().request(
+    `${origin}/api/auth/email`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: origin },
+      body: JSON.stringify({ email: 'nokey@example.test' }),
+    },
     local,
   )
-  expect(feed.status).toBe(200)
-
-  const signOut = await sessionApp.request(
-    `${origin}/api/auth/signout`,
-    { method: 'POST', headers: { Origin: origin, Cookie: cookie } },
-    local,
-  )
-  expect(signOut.status).toBe(303)
-  const after = await sessionApp.request(
-    `${origin}/api/session`,
-    { headers: { Cookie: cookie } },
-    local,
-  )
-  expect(((await after.json()) as { user: unknown }).user).toBeNull()
+  expect(response.status).toBe(503)
+  const text = await response.text()
+  expect(text).not.toMatch(/\d{6}/)
 })
 
 test('email sign-in fails closed on a hosted origin without a provider', async () => {

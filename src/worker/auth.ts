@@ -68,11 +68,6 @@ export function emailConfigured(env: Env): boolean {
   )
 }
 
-/** Localhost may show the code on screen only while no provider is set. */
-export function allowsDevCode(request: Request, env: Env): boolean {
-  return isLoopback(request) && !emailConfigured(env)
-}
-
 function sessionSecret(env: Env, request: Request): string | null {
   if (env.SESSION_SECRET && env.SESSION_SECRET.length >= 16)
     return env.SESSION_SECRET
@@ -361,7 +356,7 @@ function senderAddress(from: string): string {
 type AuthStatus = 400 | 429 | 503
 
 export type EmailStart =
-  | { ok: true; devCode?: string }
+  | { ok: true }
   | { ok: false; status: AuthStatus; error: string }
 
 export async function startEmailCode(
@@ -410,22 +405,17 @@ export async function startEmailCode(
     .bind(email, await sha256(`${email}:${code}:${secret}`), now, now + CODE_TTL)
     .run()
 
-  if (emailConfigured(env)) {
-    if (await sendCodeEmail(env, email, code)) return { ok: true }
-    // A configured provider that fails must not leak a fallback code.
-    await db.prepare('DELETE FROM login_codes WHERE email = ?').bind(email).run()
-    return {
-      ok: false,
-      status: 503,
-      error: 'We could not send that email. Please try again.',
-    }
-  }
-  if (allowsDevCode(request, env)) return { ok: true, devCode: code }
+  // The code is only ever delivered by email. It is never returned to the
+  // browser, so a sign-in cannot be completed from the page alone.
+  if (emailConfigured(env) && (await sendCodeEmail(env, email, code)))
+    return { ok: true }
   await db.prepare('DELETE FROM login_codes WHERE email = ?').bind(email).run()
   return {
     ok: false,
     status: 503,
-    error: 'Email delivery is not configured yet.',
+    error: emailConfigured(env)
+      ? 'We could not send that email. Please try again.'
+      : 'Email sign-in is not set up yet.',
   }
 }
 
