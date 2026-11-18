@@ -1,10 +1,9 @@
 /**
  * First-party authentication for Readshelf.
  *
- * - Email sign-in uses a six-digit one-time code (no passwords).
  * - Google uses the standard OAuth 2.0 code flow.
- * - Both end in the same HttpOnly session cookie, backed by a D1 row so a
- *   session can be revoked server-side.
+ * - A successful sign-in ends in an HttpOnly session cookie, backed by a D1 row
+ *   so a session can be revoked server-side.
  */
 
 export type AuthUser = {
@@ -24,22 +23,12 @@ export type Env = {
   SESSION_SECRET?: string
   GOOGLE_CLIENT_ID?: string
   GOOGLE_CLIENT_SECRET?: string
-  /** Resend API key for email codes, with a verified sender. */
-  RESEND_API_KEY?: string
-  /** SendGrid API key, used when Resend is not configured. */
-  SENDGRID_API_KEY?: string
-  /** Verified sender, e.g. `Readshelf <hello@yourdomain>`. */
-  EMAIL_FROM?: string
 }
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 const SESSION_COOKIE = 'readshelf_session'
 const STATE_COOKIE = 'readshelf_oauth_state'
-const CODE_TTL = 10 * 60 * 1000
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000
-const MAX_CODES_PER_WINDOW = 5
-const MAX_ATTEMPTS = 5
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export function isLoopback(request: Request): boolean {
   return LOOPBACK.has(new URL(request.url).hostname)
@@ -62,12 +51,6 @@ export function googleEnabled(env: Env): boolean {
   return Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET)
 }
 
-export function emailConfigured(env: Env): boolean {
-  return Boolean(
-    (env.RESEND_API_KEY || env.SENDGRID_API_KEY) && env.EMAIL_FROM,
-  )
-}
-
 function sessionSecret(env: Env, request: Request): string | null {
   if (env.SESSION_SECRET && env.SESSION_SECRET.length >= 16)
     return env.SESSION_SECRET
@@ -77,11 +60,6 @@ function sessionSecret(env: Env, request: Request): string | null {
 /* ---------- crypto and cookies ---------- */
 
 const encoder = new TextEncoder()
-
-async function sha256(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(value))
-  return hex(new Uint8Array(digest))
-}
 
 async function hmac(secret: string, value: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -135,14 +113,6 @@ const schema = [
     created_at INTEGER NOT NULL,
     last_seen_at INTEGER NOT NULL
   )`,
-  `CREATE TABLE IF NOT EXISTS login_codes (
-    email TEXT NOT NULL,
-    code_hash TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL,
-    attempts INTEGER NOT NULL DEFAULT 0
-  )`,
-  `CREATE INDEX IF NOT EXISTS login_codes_email ON login_codes(email, created_at DESC)`,
   `CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -171,7 +141,12 @@ export function ensureAuthSchema(db: D1Database): Promise<void> {
 
 /* ---------- sessions ---------- */
 
-type SessionRow = { expires_at: number; id: string; email: string; name: string | null }
+type SessionRow = {
+  expires_at: number
+  id: string
+  email: string
+  name: string | null
+}
 
 export async function currentUser(
   request: Request,
@@ -296,185 +271,6 @@ async function claimLegacyItems(
     .bind(userId, (name || 'Reader').slice(0, 80))
     .run()
     .catch(() => undefined)
-}
-
-/* ---------- email codes ---------- */
-
-async function sendCodeEmail(
-  env: Env,
-  email: string,
-  code: string,
-): Promise<boolean> {
-  if (!env.EMAIL_FROM) return false
-  const subject = `Your Readshelf sign-in code: ${code}`
-  const text = `Your Readshelf code is ${code}. It expires in 10 minutes.`
-  const html = `<p>Your Readshelf code is</p><p style="font-size:28px;letter-spacing:6px;font-weight:700">${code}</p><p>It expires in 10 minutes. If you didn't ask for it, ignore this email.</p>`
-
-  try {
-    if (env.RESEND_API_KEY) {
-      const response = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${env.RESEND_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ from: env.EMAIL_FROM, to: email, subject, text, html }),
-      })
-      return response.ok
-    }
-    if (env.SENDGRID_API_KEY) {
-      const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${env.SENDGRID_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          personalizations: [{ to: [{ email }] }],
-          from: { email: senderAddress(env.EMAIL_FROM) },
-          subject,
-          content: [
-            { type: 'text/plain', value: text },
-            { type: 'text/html', value: html },
-          ],
-        }),
-      })
-      return response.ok
-    }
-  } catch {
-    return false
-  }
-  return false
-}
-
-/** Accepts both `Name <mail@host>` and a bare address. */
-function senderAddress(from: string): string {
-  const match = from.match(/<([^>]+)>/)
-  return (match?.[1] || from).trim()
-}
-
-type AuthStatus = 400 | 429 | 503
-
-export type EmailStart =
-  | { ok: true }
-  | { ok: false; status: AuthStatus; error: string }
-
-export async function startEmailCode(
-  db: D1Database,
-  emailInput: unknown,
-  request: Request,
-  env: Env,
-): Promise<EmailStart> {
-  if (typeof emailInput !== 'string' || !EMAIL_RE.test(emailInput.trim()))
-    return { ok: false, status: 400, error: 'Enter a valid email address.' }
-  const email = emailInput.trim().toLowerCase()
-  const secret = sessionSecret(env, request)
-  if (!secret)
-    return {
-      ok: false,
-      status: 503,
-      error: 'Sign-in is not configured yet.',
-    }
-
-  await ensureAuthSchema(db)
-  const recent = await db
-    .prepare(
-      'SELECT COUNT(*) AS total FROM login_codes WHERE email = ? AND created_at > ?',
-    )
-    .bind(email, Date.now() - CODE_TTL)
-    .first<{ total: number }>()
-  if ((recent?.total ?? 0) >= MAX_CODES_PER_WINDOW)
-    return {
-      ok: false,
-      status: 429,
-      error: 'Too many codes requested. Try again in a few minutes.',
-    }
-
-  const code = String(
-    crypto.getRandomValues(new Uint32Array(1))[0]! % 1_000_000,
-  ).padStart(6, '0')
-  const now = Date.now()
-  await db
-    .prepare('DELETE FROM login_codes WHERE email = ? AND expires_at < ?')
-    .bind(email, now)
-    .run()
-  await db
-    .prepare(
-      'INSERT INTO login_codes (email, code_hash, created_at, expires_at, attempts) VALUES (?, ?, ?, ?, 0)',
-    )
-    .bind(email, await sha256(`${email}:${code}:${secret}`), now, now + CODE_TTL)
-    .run()
-
-  // The code is only ever delivered by email. It is never returned to the
-  // browser, so a sign-in cannot be completed from the page alone.
-  if (emailConfigured(env) && (await sendCodeEmail(env, email, code)))
-    return { ok: true }
-  await db.prepare('DELETE FROM login_codes WHERE email = ?').bind(email).run()
-  return {
-    ok: false,
-    status: 503,
-    error: emailConfigured(env)
-      ? 'We could not send that email. Please try again.'
-      : 'Email sign-in is not set up yet.',
-  }
-}
-
-export type EmailVerify =
-  | { ok: true; user: AuthUser; cookie: string }
-  | { ok: false; status: AuthStatus; error: string }
-
-export async function verifyEmailCode(
-  db: D1Database,
-  emailInput: unknown,
-  codeInput: unknown,
-  request: Request,
-  env: Env,
-): Promise<EmailVerify> {
-  if (typeof emailInput !== 'string' || !EMAIL_RE.test(emailInput.trim()))
-    return { ok: false, status: 400, error: 'Enter a valid email address.' }
-  if (typeof codeInput !== 'string' || !/^\d{6}$/.test(codeInput.trim()))
-    return { ok: false, status: 400, error: 'Enter the six-digit code.' }
-  const email = emailInput.trim().toLowerCase()
-  const secret = sessionSecret(env, request)
-  if (!secret)
-    return { ok: false, status: 503, error: 'Sign-in is not configured yet.' }
-
-  await ensureAuthSchema(db)
-  const row = await db
-    .prepare(
-      'SELECT code_hash, expires_at, attempts FROM login_codes WHERE email = ? ORDER BY created_at DESC LIMIT 1',
-    )
-    .bind(email)
-    .first<{ code_hash: string; expires_at: number; attempts: number }>()
-  if (!row || row.expires_at < Date.now())
-    return {
-      ok: false,
-      status: 400,
-      error: 'That code has expired. Request a new one.',
-    }
-  if (row.attempts >= MAX_ATTEMPTS)
-    return {
-      ok: false,
-      status: 429,
-      error: 'Too many attempts. Request a new code.',
-    }
-  const expected = await sha256(`${email}:${codeInput.trim()}:${secret}`)
-  if (expected !== row.code_hash) {
-    await db
-      .prepare('UPDATE login_codes SET attempts = attempts + 1 WHERE email = ?')
-      .bind(email)
-      .run()
-    return { ok: false, status: 400, error: 'That code is not correct.' }
-  }
-
-  await db.prepare('DELETE FROM login_codes WHERE email = ?').bind(email).run()
-  const user = await upsertUser(db, email)
-  if (isLoopback(request)) await claimLegacyItems(db, user.sub, user.name)
-  return {
-    ok: true,
-    user,
-    cookie: await createSession(db, user.sub, request, env),
-  }
 }
 
 /* ---------- Google ---------- */

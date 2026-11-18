@@ -6,15 +6,12 @@ import {
   clearSessionCookie,
   clearStateCookie,
   currentUser,
-  emailConfigured,
   ensureAuthSchema,
   finishGoogle,
   googleAuthUrl,
   googleEnabled,
   isSameOrigin,
   revokeSession,
-  startEmailCode,
-  verifyEmailCode,
   type AuthUser,
   type Env,
 } from './auth'
@@ -92,7 +89,7 @@ function parseJson(body: unknown): { error: string } | { fields: JsonFields } {
   return { fields }
 }
 
-/** Tests inject identities; production always uses the Freebuff SDK. */
+/** Tests inject identities; production always uses the session cookie. */
 export function createApp(authenticate: Authenticate = currentUser) {
   const app = new Hono<AppContext>()
   app.get('/api/health', (c) => c.json({ ok: true }))
@@ -106,7 +103,6 @@ export function createApp(authenticate: Authenticate = currentUser) {
       mode: 'ready',
       database: Boolean(c.env.DB),
       storage: Boolean(c.env.FILES),
-      email: emailConfigured(c.env),
       google: googleEnabled(c.env),
     }),
   )
@@ -120,35 +116,6 @@ export function createApp(authenticate: Authenticate = currentUser) {
       return c.json({ error: 'Sign-in is not set up yet.' }, 503)
     await next()
   }
-
-  app.post('/api/auth/email', authGuard, async (c) => {
-    const body = await c.req.json().catch(() => null)
-    const result = await startEmailCode(
-      c.env.DB!,
-      (body as { email?: unknown } | null)?.email,
-      c.req.raw,
-      c.env,
-    )
-    if (!result.ok) return c.json({ error: result.error }, result.status)
-    return c.json({ ok: true })
-  })
-
-  app.post('/api/auth/email/verify', authGuard, async (c) => {
-    const body = (await c.req.json().catch(() => null)) as {
-      email?: unknown
-      code?: unknown
-    } | null
-    const result = await verifyEmailCode(
-      c.env.DB!,
-      body?.email,
-      body?.code,
-      c.req.raw,
-      c.env,
-    )
-    if (!result.ok) return c.json({ error: result.error }, result.status)
-    c.header('Set-Cookie', result.cookie)
-    return c.json({ user: result.user })
-  })
 
   app.post('/api/auth/signout', authGuard, async (c) => {
     await revokeSession(c.req.raw, c.env)

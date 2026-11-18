@@ -22,7 +22,6 @@ export type Session = {
   mode: 'ready' | 'setup'
   database: boolean
   storage: boolean
-  /** A provider is configured, so codes can actually be emailed. */
-  email: boolean
+  /** True when Google sign-in is configured. */
   google: boolean
 }

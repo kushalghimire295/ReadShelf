@@ -10,8 +10,8 @@ shelf; anything they mark public is shown to other readers on the Home feed.
   and only readers allowed to open an item can increment it.
 - **Public** — appears on every other reader's Home feed, newest first. Private
   reads never appear there.
-- **Sign-in** — passwordless. A six-digit code by email, or Google. The first
-  sign-in creates the account; there are no passwords to store.
+- **Sign-in** — Google only, on phone or desktop. The first sign-in creates
+  the account; there are no passwords to store.
 - **Covers** — a separate cover image can be uploaded with a document, and
   that image is used on every card and row instead of the document preview.
 - Files live in R2 (`FILES`); titles, sharing and cover references live in D1
@@ -28,22 +28,22 @@ bun run build
 ```
 
 Open the URL printed by Vite. The server binds to `0.0.0.0` and runs the Worker
-with local D1 and R2 bindings. Sign-in codes are only ever delivered by email,
-so a local run needs an email provider key (see below) before anyone can sign
-in. Documents uploaded before sign-in existed belong to the `local-preview`
-owner and are adopted by the first sign-in on that machine.
+with local D1 and R2 bindings. Sign-in needs a Google OAuth client (see below);
+until one is configured the gate lists the exact redirect URI to register.
+Documents uploaded before sign-in existed belong to the `local-preview` owner
+and are adopted by the first sign-in on that machine.
 
 ## Where things live
 
 - `src/client/main.tsx` — the full-page sign-in gate, Home feed, Most opened,
   My shelf, upload form, reader overlay and the light/dark theme switch.
-  Signed out, only the gate renders; the development identity bypasses it.
+  Signed out, only the gate renders.
 - `src/client/style.css` — responsive layout: 2-up cards on phones, a wider
   auto-fill grid from tablet up.
 - `src/worker/app.ts` — `/api/auth/*` routes plus `/api/feed`, `/api/items`
   CRUD, `/api/items/:id/file` and `/api/items/:id/cover`.
-- `src/worker/auth.ts` — email one-time codes, Google OAuth, and the signed
-  HttpOnly session cookie stored in D1 (`users`, `login_codes`, `sessions`).
+- `src/worker/auth.ts` — Google OAuth and the signed HttpOnly session cookie
+  stored in D1 (`users`, `sessions`).
 - `src/worker/db.ts` — the D1 `items` table and row mapping.
 - `src/shared/types.ts` — API types shared by browser and server.
 
@@ -52,8 +52,6 @@ owner and are adopted by the first sign-in on that machine.
 | Route | Purpose |
 | --- | --- |
 | `GET /api/session` | current user, plus which sign-in methods are available |
-| `POST /api/auth/email` | send (or locally show) a six-digit sign-in code |
-| `POST /api/auth/email/verify` | exchange the code for a session cookie |
 | `GET /api/auth/google` | start Google OAuth |
 | `GET /api/auth/google/callback` | finish Google OAuth and set the session |
 | `POST /api/auth/signout` | revoke the session and clear the cookie |
@@ -79,17 +77,23 @@ Sign-in is part of the Worker; there is no third-party auth service.
 | Variable | Purpose |
 | --- | --- |
 | `SESSION_SECRET` | 32+ random characters. Signs session cookies. Required on any non-loopback origin. |
-| `RESEND_API_KEY` | Resend API key used to deliver email codes. |
-| `SENDGRID_API_KEY` | Alternative to Resend; used when Resend is unset. |
-| `EMAIL_FROM` | Verified sender, e.g. `Readshelf <hello@yourdomain>`. |
 | `GOOGLE_CLIENT_ID` | Google OAuth client id. |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret. |
 | `APP_ORIGIN` | Canonical public origin, also the base for the Google redirect. |
 
-Register `<APP_ORIGIN>/api/auth/google/callback` as the Google redirect URI.
-Codes are never returned to the browser: with a provider key and `EMAIL_FROM`
-the six-digit code is emailed and nothing is shown on screen. Without them the
-request is refused with “Email sign-in is not set up yet”, on every origin.
+To enable Google sign-in, in Google Cloud Console create (or reuse) a project,
+open **APIs & Services → OAuth consent screen** and add yourself as a test user,
+then **Credentials → Create credentials → OAuth client ID → Web application** and
+register these redirect URIs:
+
+- `http://localhost:5174/api/auth/google/callback` for local development
+- `<APP_ORIGIN>/api/auth/google/callback` for a deployed site
+
+Put the client id and secret in `.dev.vars` (local) or project secrets
+(deployed), set `APP_ORIGIN` to the origin serving the app, and restart. The
+callback exchanges the code for a token, reads the verified Google profile and
+opens a session; the phone opens Google's own account picker, so the account
+already on the device is used.
 
 ## Publish
 
@@ -104,6 +108,7 @@ request is refused with “Email sign-in is not set up yet”, on every origin.
 round-trip, private items stay owner-only (including the file route), public
 items surface in other feeds, sharing changes take effect, opens are counted and
 ranked while private items stay out of the ranking, covers are stored, served and
-access-checked, email codes create a session that sign-out revokes, and
-signed-out/foreign-origin/oversized requests are refused. After provisioning, verify real sign-in, refresh, sign-out
-and two accounts' isolation in a browser.
+access-checked, the Google redirect and callback open a session that sign-out
+revokes, and signed-out/foreign-origin/oversized requests are refused. After
+provisioning, verify real sign-in, refresh, sign-out and two accounts' isolation
+in a browser.

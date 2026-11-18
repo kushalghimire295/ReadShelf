@@ -156,52 +156,11 @@ function Thumb({ item, big = false }: { item: Item; big?: boolean }) {
 }
 
 function SignIn({ session }: { session: Session }) {
-  const [email, setEmail] = useState('')
-  const [code, setCode] = useState('')
-  const [step, setStep] = useState<'email' | 'code'>('email')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(
-    () => new URLSearchParams(window.location.search).get('authError') || '',
+  const [error] = useState(
+    () =>
+      new URLSearchParams(window.location.search).get('authError') ||
+      (session.google ? '' : 'google-unavailable'),
   )
-
-  async function sendCode(event: React.FormEvent) {
-    event.preventDefault()
-    if (busy) return
-    setBusy(true)
-    setError('')
-    try {
-      await request<{ ok: boolean }>('/api/auth/email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      })
-      setStep('code')
-      setCode('')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not send the code.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function verify(event: React.FormEvent) {
-    event.preventDefault()
-    if (busy) return
-    setBusy(true)
-    setError('')
-    try {
-      await request<{ user: Session['user'] }>('/api/auth/email/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, code }),
-      })
-      // Reload so the app boots with the new session and its own data.
-      window.location.replace('/')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not sign in.')
-      setBusy(false)
-    }
-  }
 
   return (
     <main className="gate">
@@ -210,97 +169,44 @@ function SignIn({ session }: { session: Session }) {
           <span className="mark" aria-hidden="true" />
           Readshelf
         </span>
-        <h1>{step === 'email' ? 'Sign in to Readshelf.' : 'Check your email.'}</h1>
+        <h1>Sign in to Readshelf.</h1>
         <p className="lede">
-          {step === 'email'
-            ? 'Your first sign-in creates the account. No password to remember.'
-            : `We sent a six-digit code to ${email}. It stays valid for ten minutes.`}
+          Continue with the Google account on your phone or computer. Your first
+          sign-in creates your account.
         </p>
 
-        {step === 'email' ? (
-          <form className="signin" onSubmit={sendCode}>
-            <label className="field">
-              <span>Email</span>
-              <input
-                type="email"
-                required
-                autoComplete="email"
-                placeholder="you@example.com"
-                value={email}
-                disabled={busy}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </label>
-            <button
-              className="primary gate-button"
-              disabled={busy || !email.trim()}
-            >
-              {busy ? 'Sending…' : 'Email me a code'}
-            </button>
-            {!session.email && (
-              <p className="gate-note">
-                Email sign-in is not configured on this site yet.
-              </p>
-            )}
-          </form>
+        {session.google ? (
+          <a className="primary button gate-button" href="/api/auth/google">
+            Continue with Google
+          </a>
         ) : (
-          <form className="signin" onSubmit={verify}>
-            <label className="field">
-              <span>Six-digit code</span>
-              <input
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                pattern="[0-9]*"
-                maxLength={6}
-                placeholder="000000"
-                className="code-input"
-                value={code}
-                disabled={busy}
-                onChange={(e) =>
-                  setCode(e.target.value.replace(/\D/g, '').slice(0, 6))
-                }
-              />
-            </label>
-            <button
-              className="primary gate-button"
-              disabled={busy || code.length !== 6}
-            >
-              {busy ? 'Checking…' : 'Sign in'}
-            </button>
-            <div className="signin-links">
-              <button type="button" className="quiet small" onClick={sendCode}>
-                Send a new code
-              </button>
-              <button
-                type="button"
-                className="quiet small"
-                onClick={() => {
-                  setStep('email')
-                  setCode('')
-                  setError('')
-                }}
-              >
-                Use a different email
-              </button>
-            </div>
-          </form>
+          <div className="signin">
+            <p className="notice">
+              Google sign-in is not set up yet. Add your Google OAuth client and
+              reload this page.
+            </p>
+            <ol className="gate-steps">
+              <li>
+                In Google Cloud Console, create an OAuth client (Web application)
+                and enable the Google sign-in / OpenID scopes.
+              </li>
+              <li>
+                Add this exact redirect URI:{' '}
+                <code>{`${window.location.origin}/api/auth/google/callback`}</code>
+              </li>
+              <li>
+                Set <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>,
+                <code> APP_ORIGIN</code> ({window.location.origin}) and a long{' '}
+                <code>SESSION_SECRET</code>, then restart the server.
+              </li>
+            </ol>
+          </div>
         )}
 
-        {error && (
+        {error && error !== 'google-unavailable' && (
           <p role="alert" className="error">
             {error}
           </p>
-        )}
-
-        {session.google && (
-          <>
-            <p className="or-line">
-              <span>or</span>
-            </p>
-            <a className="button gate-button" href="/api/auth/google">
-              Continue with Google
-            </a>
-          </>
         )}
 
         <ul className="gate-points">

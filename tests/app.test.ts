@@ -398,26 +398,74 @@ test('missing storage or database reports setup', async () => {
   ).toBe(503)
 })
 
-test('email codes are emailed and sign a reader in', async () => {
-  const origin = 'http://localhost:5000'
-  const local: Env = {
+test('Google sign-in starts at Google and only accepts a matching state', async () => {
+  const origin = 'https://app.example.test'
+  const hosted: Env = {
     ...env,
     APP_ORIGIN: origin,
-    RESEND_API_KEY: 're_test',
-    EMAIL_FROM: 'Readshelf <no-reply@example.test>',
+    SESSION_SECRET: 'test-secret-that-is-long-enough',
+    GOOGLE_CLIENT_ID: 'client-id.apps.googleusercontent.com',
+    GOOGLE_CLIENT_SECRET: 'client-secret',
   }
-  // The default app reads the real session cookie rather than the test header.
   const sessionApp = createApp()
-  const email = 'reader@example.test'
-  const json = (body: unknown): RequestInit => ({
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Origin: origin },
-    body: JSON.stringify(body),
-  })
 
-  // Stand in for Resend and capture the code the way a mail client would.
+  const start = await sessionApp.request(`${origin}/api/auth/google`, {}, hosted)
+  expect(start.status).toBe(303)
+  const location = new URL(start.headers.get('Location')!)
+  expect(location.origin).toBe('https://accounts.google.com')
+  expect(location.searchParams.get('redirect_uri')).toBe(
+    `${origin}/api/auth/google/callback`,
+  )
+  expect(location.searchParams.get('scope')).toBe('openid email profile')
+  expect(location.searchParams.get('prompt')).toBe('select_account')
+  const state = location.searchParams.get('state')!
+  expect(state).toMatch(/^[0-9a-f]{32}$/)
+  const stateCookie = (start.headers.get('Set-Cookie') ?? '').split(';')[0]!
+  expect(stateCookie.startsWith('readshelf_oauth_state=')).toBe(true)
+
+  // A callback carrying a different state is refused before any token call.
+  const forged = await sessionApp.request(
+    `${origin}/api/auth/google/callback?code=abc&state=deadbeef`,
+    { headers: { Cookie: stateCookie } },
+    hosted,
+  )
+  expect(forged.status).toBe(303)
+  expect(forged.headers.get('Location')).toContain('authError=')
+  expect((await sessionApp.request(`${origin}/api/session`, {}, hosted)).status).toBe(
+    200,
+  )
+
+  // Without configuration the start route bounces back to the gate.
+  const off = await sessionApp.request(
+    `${origin}/api/auth/google`,
+    {},
+    { ...hosted, GOOGLE_CLIENT_ID: undefined, GOOGLE_CLIENT_SECRET: undefined },
+  )
+  expect(off.headers.get('Location')).toBe('/?authError=google-unavailable')
+
+  const session = (await (
+    await sessionApp.request(`${origin}/api/session`, {}, hosted)
+  ).json()) as { google: boolean }
+  expect(session.google).toBe(true)
+})
+
+test('a Google callback signs the reader in and sign-out revokes the session', async () => {
+  const origin = 'https://app.example.test'
+  const hosted: Env = {
+    ...env,
+    APP_ORIGIN: origin,
+    SESSION_SECRET: 'test-secret-that-is-long-enough',
+    GOOGLE_CLIENT_ID: 'client-id.apps.googleusercontent.com',
+    GOOGLE_CLIENT_SECRET: 'client-secret',
+  }
+  const sessionApp = createApp()
+  const start = await sessionApp.request(`${origin}/api/auth/google`, {}, hosted)
+  const state = new URL(start.headers.get('Location')!).searchParams.get('state')!
+  const stateCookie = (start.headers.get('Set-Cookie') ?? '').split(';')[0]!
+
+  // Stand in for Google's token and userinfo endpoints.
   const realFetch = globalThis.fetch.bind(globalThis)
-  let sentCode = ''
+  const seen: string[] = []
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url =
       typeof input === 'string'
@@ -425,142 +473,75 @@ test('email codes are emailed and sign a reader in', async () => {
         : input instanceof URL
           ? input.toString()
           : input.url
-    if (url.startsWith('https://api.resend.com/')) {
-      const payload = JSON.parse(String(init?.body ?? '{}')) as { text?: string }
-      sentCode = payload.text?.match(/\b(\d{6})\b/)?.[1] ?? ''
-      return new Response('{"id":"test"}', { status: 200 })
+    seen.push(url)
+    if (url === 'https://oauth2.googleapis.com/token') {
+      const form = new URLSearchParams(String(init?.body ?? ''))
+      if (form.get('grant_type') !== 'authorization_code')
+        return new Response('bad grant', { status: 400 })
+      return Response.json({ access_token: 'google-access-token' })
     }
+    if (url === 'https://openidconnect.googleapis.com/v1/userinfo')
+      return Response.json({
+        email: 'Reader@Gmail.com',
+        email_verified: true,
+        name: 'Real Reader',
+      })
     return realFetch(input as RequestInfo, init)
   }) as typeof fetch
 
   try {
-    const send = await sessionApp.request(
-      `${origin}/api/auth/email`,
-      json({ email }),
-      local,
+    const callback = await sessionApp.request(
+      `${origin}/api/auth/google/callback?code=good-code&state=${state}`,
+      { headers: { Cookie: stateCookie } },
+      hosted,
     )
-    expect(send.status).toBe(200)
-    const sent = (await send.json()) as { devCode?: string }
-    // Nothing that could complete sign-in is ever sent to the browser.
-    expect(sent.devCode).toBeUndefined()
-    expect(JSON.stringify(sent)).not.toContain(sentCode)
-    expect(sentCode).toMatch(/^\d{6}$/)
+    expect(callback.status).toBe(303)
+    expect(callback.headers.get('Location')).toBe('/')
+    expect(seen).toContain('https://oauth2.googleapis.com/token')
+    expect(seen).toContain('https://openidconnect.googleapis.com/v1/userinfo')
 
-    // A wrong code is refused, and the emailed one returns a session cookie.
-    const wrong = await sessionApp.request(
-      `${origin}/api/auth/email/verify`,
-      json({ email, code: '000000' }),
-      local,
+    const cookies = (callback.headers.get('Set-Cookie') ?? '')
+      .split(',')
+      .map((part) => part.split(';')[0]!.trim())
+    const sessionCookie = cookies.find((part) =>
+      part.startsWith('readshelf_session='),
     )
-    expect(wrong.status).toBe(400)
+    expect(sessionCookie).toBeDefined()
+    expect(callback.headers.get('Set-Cookie')).toContain('HttpOnly')
 
-    const verify = await sessionApp.request(
-      `${origin}/api/auth/email/verify`,
-      json({ email, code: sentCode }),
-      local,
-    )
-    expect(verify.status).toBe(200)
-    const setCookie = verify.headers.get('Set-Cookie') ?? ''
-    expect(setCookie).toContain('readshelf_session=')
-    expect(setCookie).toContain('HttpOnly')
-    const cookie = setCookie.split(';')[0]!
-
-    const session = await sessionApp.request(
-      `${origin}/api/session`,
-      { headers: { Cookie: cookie } },
-      local,
-    )
-    const body = (await session.json()) as {
-      user: { email: string } | null
-      email: boolean
-    }
-    expect(body.user?.email).toBe(email)
-    expect(body.email).toBe(true)
+    const session = (await (
+      await sessionApp.request(
+        `${origin}/api/session`,
+        { headers: { Cookie: sessionCookie! } },
+        hosted,
+      )
+    ).json()) as { user: { email: string; name: string } | null }
+    // The address is normalised, so one Google account is one shelf.
+    expect(session.user).toMatchObject({
+      email: 'reader@gmail.com',
+      name: 'Real Reader',
+    })
 
     const shelf = await sessionApp.request(
       `${origin}/api/items`,
-      { headers: { Cookie: cookie } },
-      local,
+      { headers: { Cookie: sessionCookie! } },
+      hosted,
     )
     expect(shelf.status).toBe(200)
 
     const signOut = await sessionApp.request(
       `${origin}/api/auth/signout`,
-      { method: 'POST', headers: { Origin: origin, Cookie: cookie } },
-      local,
+      { method: 'POST', headers: { Origin: origin, Cookie: sessionCookie! } },
+      hosted,
     )
     expect(signOut.status).toBe(303)
     const after = await sessionApp.request(
       `${origin}/api/session`,
-      { headers: { Cookie: cookie } },
-      local,
+      { headers: { Cookie: sessionCookie! } },
+      hosted,
     )
     expect(((await after.json()) as { user: unknown }).user).toBeNull()
   } finally {
     globalThis.fetch = realFetch
   }
-})
-
-test('a missing email provider never returns a usable code', async () => {
-  const origin = 'http://localhost:5000'
-  const local: Env = { ...env, APP_ORIGIN: origin }
-  const response = await createApp().request(
-    `${origin}/api/auth/email`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: origin },
-      body: JSON.stringify({ email: 'nokey@example.test' }),
-    },
-    local,
-  )
-  expect(response.status).toBe(503)
-  const text = await response.text()
-  expect(text).not.toMatch(/\d{6}/)
-})
-
-test('email sign-in fails closed on a hosted origin without a provider', async () => {
-  const origin = 'https://app.example.test'
-  const hosted: Env = {
-    ...env,
-    APP_ORIGIN: origin,
-    SESSION_SECRET: 'test-secret-that-is-long-enough',
-  }
-  const response = await createApp().request(
-    `${origin}/api/auth/email`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: origin },
-      body: JSON.stringify({ email: 'hosted@example.test' }),
-    },
-    hosted,
-  )
-  expect(response.status).toBe(503)
-  const body = (await response.json()) as { devCode?: string }
-  expect(body.devCode).toBeUndefined()
-})
-
-test('email sign-in refuses cross-origin and invalid addresses', async () => {
-  const origin = 'http://localhost:5000'
-  const local: Env = { ...env, APP_ORIGIN: origin }
-  const crossOrigin = await app.request(
-    `${origin}/api/auth/email`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: 'https://evil.test' },
-      body: JSON.stringify({ email: 'reader@example.test' }),
-    },
-    local,
-  )
-  expect(crossOrigin.status).toBe(403)
-
-  const invalid = await app.request(
-    `${origin}/api/auth/email`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: origin },
-      body: JSON.stringify({ email: 'not-an-email' }),
-    },
-    local,
-  )
-  expect(invalid.status).toBe(400)
 })

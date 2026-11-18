@@ -1,17 +1,13 @@
-# Copy to .dev.vars to enable email and Google sign-in.
-# Codes are only sent by email; without a provider nobody can sign in.
+# Copy to .dev.vars to enable Google sign-in.
+# Create a Web application OAuth client in Google Cloud Console and register:
+#   http://localhost:5174/api/auth/google/callback
+#   <APP_ORIGIN>/api/auth/google/callback
 
 # 32+ random characters. Required on any hosted origin.
 # SESSION_SECRET=change-me-to-a-long-random-string
 
-# Email codes (either provider; codes are emailed, not shown, once set)
-# RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxx
-# SENDGRID_API_KEY=SG.xxxxxxxxxxxxxxxxxxxxxx
-# EMAIL_FROM=Readshelf <hello@yourdomain>
-
-# Google OAuth (redirect URI: <APP_ORIGIN>/api/auth/google/callback)
 # GOOGLE_CLIENT_ID=xxxxxxxx.apps.googleusercontent.com
 # GOOGLE_CLIENT_SECRET=xxxxxxxxxxxxxxxx
 
-# Canonical origin for this machine, used to build the Google redirect.
+# Origin serving the app; the Google redirect is built from it.
 # APP_ORIGIN=http://localhost:5174
