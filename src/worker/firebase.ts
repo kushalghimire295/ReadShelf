@@ -163,8 +163,12 @@ const verified = new Map<string, Cached>()
 
 function bearer(request: Request): string {
   const header = request.headers.get('Authorization') ?? ''
-  if (!header.toLowerCase().startsWith('bearer ')) return ''
-  return header.slice(7).trim()
+  if (header.toLowerCase().startsWith('bearer ')) return header.slice(7).trim()
+  // Covers and documents are loaded by <img>, <iframe> and download links,
+  // which cannot set headers, so those reads may carry the token in the URL.
+  // Writes never do, and a mutation cannot be triggered from a GET link.
+  if (request.method !== 'GET' && request.method !== 'HEAD') return ''
+  return new URL(request.url).searchParams.get('t')?.trim() ?? ''
 }
 
 export async function verifyFirebaseUser(

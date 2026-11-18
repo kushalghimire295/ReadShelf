@@ -571,6 +571,59 @@ test('Firebase ID tokens are verified against the project', async () => {
     expect(
       ((await allowed.json()) as { user: { email: string } }).user.email,
     ).toBe('reader@gmail.com')
+
+    // Covers and documents are loaded by <img>/<iframe>, which cannot set a
+    // header, so those reads accept the token in the query string instead.
+    const form = new FormData()
+    form.append(
+      'file',
+      new File([new Uint8Array([137, 80, 78, 71])], 'page.png', {
+        type: 'image/png',
+      }),
+    )
+    form.append(
+      'cover',
+      new File([new Uint8Array([1, 2, 3])], 'cover.png', {
+        type: 'image/png',
+      }),
+    )
+    form.append('title', 'Inline read')
+    const created = await realApp.request(
+      `${ORIGIN}/api/items`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${makeToken()}`, Origin: ORIGIN },
+        body: form,
+      },
+      firebaseEnv,
+    )
+    expect(created.status).toBe(201)
+    const id = ((await created.json()) as { item: { id: string } }).item.id
+
+    const inline = await realApp.request(
+      `${ORIGIN}/api/items/${id}/file?t=${makeToken()}`,
+      {},
+      firebaseEnv,
+    )
+    expect(inline.status).toBe(200)
+    expect(inline.headers.get('Content-Type')).toBe('image/png')
+    expect(new Uint8Array(await inline.arrayBuffer())).toEqual(
+      new Uint8Array([137, 80, 78, 71]),
+    )
+    const cover = await realApp.request(
+      `${ORIGIN}/api/items/${id}/cover?t=${makeToken()}`,
+      {},
+      firebaseEnv,
+    )
+    expect(cover.status).toBe(200)
+
+    // A leaked read link still cannot be replayed as a write.
+    const write = await realApp.request(
+      `${ORIGIN}/api/items/${id}?t=${makeToken()}`,
+      { method: 'DELETE', headers: { Origin: ORIGIN } },
+      firebaseEnv,
+    )
+    expect(write.status).toBe(401)
     // Verified against the project's signing keys, not a third-party API.
     expect(seen.some((url) => url.includes('securetoken@system.gserviceaccount.com'))).toBe(
       true,

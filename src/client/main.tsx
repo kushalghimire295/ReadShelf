@@ -28,9 +28,13 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return body
 }
 
-const fileUrl = (item: Item) => `/api/items/${item.id}/file`
+// <img>, <iframe> and download links cannot send an Authorization header, so
+// these reads carry the token in the URL instead.
+const tokenQuery = () => `t=${encodeURIComponent(accessToken() ?? '')}`
+const fileUrl = (item: Item) => `/api/items/${item.id}/file?${tokenQuery()}`
 // Versioned so a replaced cover is not served from the browser cache.
-const coverUrl = (item: Item) => `/api/items/${item.id}/cover?v=${item.updatedAt}`
+const coverUrl = (item: Item) =>
+  `/api/items/${item.id}/cover?v=${item.updatedAt}&${tokenQuery()}`
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
