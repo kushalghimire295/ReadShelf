@@ -201,6 +201,14 @@ export async function verifyFirebaseUser(
   return user
 }
 
+/**
+ * Fetches Google's signing keys ahead of the first signed-in request, so token
+ * verification does not pay for it while the reader waits for their shelf.
+ */
+export function warmSigningKeys(): Promise<unknown> {
+  return keySet().catch(() => undefined)
+}
+
 /** Tests share one process, so cached verifications can be dropped. */
 export function resetVerificationCache(): void {
   verified.clear()

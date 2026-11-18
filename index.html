@@ -9,6 +9,10 @@
       content="Readshelf — keep PDFs and images on your own shelf, private or shared with other readers."
     />
     <title>Readshelf — your reading shelf, shared or private</title>
+    <!-- Warm the connections the Google sign-in popup needs before it opens. -->
+    <link rel="preconnect" href="https://readshelf-1ca03.firebaseapp.com" crossorigin />
+    <link rel="preconnect" href="https://apis.google.com" crossorigin />
+    <link rel="preconnect" href="https://accounts.google.com" crossorigin />
     <script>
       // Apply the saved theme before the first paint to avoid a flash.
       ;(function () {

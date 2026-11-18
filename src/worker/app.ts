@@ -6,6 +6,7 @@ import {
   firebaseConfig,
   firebaseConfigured,
   verifyFirebaseUser,
+  warmSigningKeys,
   type AuthUser,
   type FirebaseEnv,
 } from './firebase'
@@ -122,15 +123,22 @@ export function createApp(
     await next()
   })
 
-  app.get('/api/status', (c) =>
-    c.json({
+  app.get('/api/status', (c) => {
+    // Google's signing keys are fetched while the popup is open, so the first
+    // authenticated request does not wait for them.
+    try {
+      c.executionCtx.waitUntil(warmSigningKeys())
+    } catch {
+      void warmSigningKeys()
+    }
+    return c.json({
       database: Boolean(c.env.DB),
       storage: Boolean(c.env.FILES),
       firebase: firebaseConfigured(c.env),
       // Public by design: the browser needs these to start Google sign-in.
       firebaseConfig: firebaseConfig(c.env),
-    }),
-  )
+    })
+  })
 
   // Null rather than 401: the page asks who is signed in before it has a token.
   app.get('/api/me', async (c) =>

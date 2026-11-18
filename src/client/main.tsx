@@ -3,11 +3,11 @@ import { createRoot } from 'react-dom/client'
 import type { Item, Status, User, Visibility } from '../shared/types'
 import {
   accessToken,
-  currentUser,
   describeAuthError,
   initFirebase,
   signInWithGoogle,
   signOut,
+  watchUser,
 } from './firebase'
 import './style.css'
 
@@ -228,6 +228,8 @@ function App() {
   const [status, setStatus] = useState<Status | null>(null)
   const [user, setUser] = useState<User | null>(null)
   const [loaded, setLoaded] = useState(false)
+  // False until Firebase has reported the restored session (or its absence).
+  const [authSettled, setAuthSettled] = useState(false)
   const [view, setView] = useState<View>('home')
   const [feed, setFeed] = useState<Item[]>([])
   // Share of public reads that Home draws from, as a 0–1 probability.
@@ -327,6 +329,7 @@ function App() {
 
   useEffect(() => {
     let live = true
+    let stop: (() => void) | undefined
     void (async () => {
       try {
         const current = await request<Status>('/api/status')
@@ -334,12 +337,15 @@ function App() {
         setStatus(current)
         if (current.firebase && current.firebaseConfig) {
           initFirebase(current.firebaseConfig)
-          const signedIn = await currentUser()
-          if (!live) return
-          setUser(signedIn)
-          if (signedIn && current.database && current.storage) {
-            await Promise.all([loadFeed(), loadPopular(), loadShelf()])
-          }
+          // Firebase reports the restored session (or no session) itself, so a
+          // fresh sign-in lands here immediately instead of on a reload.
+          stop = watchUser((signedIn) => {
+            if (!live) return
+            setUser(signedIn)
+            setAuthSettled(true)
+          })
+        } else {
+          setAuthSettled(true)
         }
       } catch (e) {
         if (live)
@@ -350,8 +356,15 @@ function App() {
     })()
     return () => {
       live = false
+      stop?.()
     }
-  }, [loadFeed, loadPopular, loadShelf])
+  }, [])
+
+  // The shell renders as soon as the account is known; the lists fill in after.
+  useEffect(() => {
+    if (!user || !status?.database || !status.storage) return
+    void Promise.all([loadFeed(), loadPopular(), loadShelf()])
+  }, [user, status, loadFeed, loadPopular, loadShelf])
 
   useEffect(() => {
     if (!reader && !pending && !confirmRemove) return
@@ -515,7 +528,7 @@ function App() {
       .catch(() => undefined)
   }
 
-  if (!loaded)
+  if (!loaded || !authSettled)
     return (
       <main className="gate">
         <div className="gate-card gate-loading">

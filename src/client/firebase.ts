@@ -18,10 +18,6 @@ export const accessToken = (): string | null => token
 export function initFirebase(config: FirebaseConfig): void {
   if (auth) return
   auth = getAuth(initializeApp(config))
-  // Firebase refreshes the ID token hourly; keep the copy we send in step.
-  onIdTokenChanged(auth, async (user) => {
-    token = user ? await user.getIdToken().catch(() => null) : null
-  })
 }
 
 function toUser(value: {
@@ -36,17 +32,20 @@ function toUser(value: {
   }
 }
 
-/** Resolves the session Firebase restored from the phone's Google account. */
-export async function currentUser(): Promise<User | null> {
-  if (!auth) return null
-  await auth.authStateReady()
-  const user = auth.currentUser
-  if (!user) {
-    token = null
-    return null
+/**
+ * Fires as soon as Firebase knows who is signed in (including a restored
+ * session), so the app never has to poll or reload to pick up a new account.
+ * The token is always stored before the callback runs.
+ */
+export function watchUser(next: (user: User | null) => void): () => void {
+  if (!auth) {
+    next(null)
+    return () => undefined
   }
-  token = await user.getIdToken()
-  return toUser(user)
+  return onIdTokenChanged(auth, async (user) => {
+    token = user ? await user.getIdToken().catch(() => null) : null
+    next(user ? toUser(user) : null)
+  })
 }
 
 export async function signInWithGoogle(): Promise<void> {
