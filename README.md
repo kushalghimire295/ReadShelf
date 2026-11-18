@@ -5,7 +5,9 @@ app works with one shelf.
 
 - **Private** — kept off the Home feed and the ranking, but still on your shelf
   and openable from there.
-- **Public** — appears on the Home feed, newest first.
+- **Public** — enters the Home draw. Each public read has a 1-in-total
+  chance of appearing on a visit (two reads: 50% each), so Home varies and
+  never shows an empty page while public reads exist.
 - **Most opened** — an all-time ranking of public reads by how many times they
   have been opened; private reads are neither counted nor listed there.
 - **Covers** — a separate cover image can be uploaded with a document, and

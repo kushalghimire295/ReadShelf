@@ -41,7 +41,9 @@ beforeAll(async () => {
 }, 20_000)
 afterAll(() => runtime.dispose())
 
-const app = createApp()
+// A fixed draw of 0 includes every candidate, so feed assertions are stable;
+// the sampling itself is exercised in its own test below.
+const app = createApp(() => 0)
 const ORIGIN = 'https://app.example.test'
 
 /** Each test starts from an empty shelf so counts mean what they say. */
@@ -150,6 +152,39 @@ test('public uploads appear on the Home feed and the shelf', async () => {
   expect(new Uint8Array(await file.arrayBuffer())).toEqual(
     new Uint8Array([137, 80, 78, 71]),
   )
+})
+
+test('each public read has a one-in-total chance of appearing on Home', async () => {
+  await reset()
+  await upload({ title: 'One' })
+  await upload({ title: 'Two' })
+
+  const all = (await (await call('/api/feed')).json()) as {
+    items: { title: string }[]
+    chance: number
+    total: number
+  }
+  // Two public reads means each has a 50% chance on any given visit.
+  expect(all.total).toBe(2)
+  expect(all.chance).toBe(0.5)
+  expect(all.items).toHaveLength(2)
+
+  // A draw that misses every read still shows one, so Home is never blank.
+  const strict = createApp(() => 0.999)
+  const drawn = (await (
+    await strict.request(`${ORIGIN}/api/feed`, {}, env)
+  ).json()) as { items: { title: string }[]; chance: number }
+  expect(drawn.chance).toBe(0.5)
+  expect(drawn.items).toHaveLength(1)
+
+  // Private reads are in neither the draw nor the total.
+  await upload({ title: 'Hidden', visibility: 'private' })
+  const again = (await (await call('/api/feed')).json()) as {
+    total: number
+    chance: number
+  }
+  expect(again).toMatchObject({ total: 2, chance: 0.5 })
+  expect(await list('/api/items')).toHaveLength(3)
 })
 
 test('private uploads stay off the feed but remain readable', async () => {

@@ -87,7 +87,7 @@ function parseJson(body: unknown): { error: string } | { fields: JsonFields } {
   return { fields }
 }
 
-export function createApp() {
+export function createApp(random: () => number = Math.random) {
   const app = new Hono<AppContext>()
   app.get('/api/health', (c) => c.json({ ok: true }))
   app.use('/api/*', async (c, next) => {
@@ -116,16 +116,30 @@ export function createApp() {
   app.use('/api/items', guard)
   app.use('/api/items/*', guard)
 
-  // Everything public, newest first. Private reads stay off the feed.
+  // The Home feed is a draw, not a list: each public read has 1/total chance of
+  // appearing, so a crowded shelf shows a varied handful instead of everything.
+  // Private reads never enter the draw.
   app.get('/api/feed', guard, async (c) => {
     const rows = await c
       .get('db')
       .prepare(
-        `SELECT ${COLUMNS} FROM items WHERE visibility = 'public' ORDER BY created_at DESC LIMIT 60`,
+        `SELECT ${COLUMNS} FROM items WHERE visibility = 'public' ORDER BY created_at DESC LIMIT 200`,
       )
       .all<ItemRow>()
+    const total = rows.results.length
+    const chance = total ? 1 / total : 0
+    const picked = rows.results.filter(() => random() < chance)
+    // Never leave Home empty while public reads exist.
+    if (total && !picked.length)
+      picked.push(rows.results[Math.min(total - 1, Math.floor(random() * total))]!)
+    for (let i = picked.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(random() * (i + 1))
+      ;[picked[i], picked[j]] = [picked[j]!, picked[i]!]
+    }
     return c.json({
-      items: rows.results.map((row) => mapItem(row)),
+      items: picked.slice(0, 60).map((row) => mapItem(row)),
+      chance,
+      total,
     })
   })
 
