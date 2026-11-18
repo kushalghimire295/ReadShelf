@@ -26,16 +26,32 @@ export type FirebaseConfig = {
   appId: string
 }
 
-/** These values are public by design; the browser needs them to sign in. */
+/**
+ * These values are public by design (they ship in every Firebase web app), so
+ * they are committed rather than configured per environment. Set the same
+ * FIREBASE_* variables to point the site at a different Firebase project.
+ */
+const DEFAULT_FIREBASE_CONFIG: FirebaseConfig = {
+  apiKey: 'AIzaSyDzjVB3mb8gXZ3tMeSSxV_kKNwPBJU6NQY',
+  authDomain: 'readshelf-1ca03.firebaseapp.com',
+  projectId: 'readshelf-1ca03',
+  appId: '1:462627161119:web:7aae1ff5f0cf8ed35cc12a',
+}
+
 export function firebaseConfig(env: FirebaseEnv): FirebaseConfig | null {
-  if (!env.FIREBASE_API_KEY || !env.FIREBASE_PROJECT_ID || !env.FIREBASE_APP_ID)
-    return null
+  const apiKey = env.FIREBASE_API_KEY || DEFAULT_FIREBASE_CONFIG.apiKey
+  const projectId = env.FIREBASE_PROJECT_ID || DEFAULT_FIREBASE_CONFIG.projectId
+  const appId = env.FIREBASE_APP_ID || DEFAULT_FIREBASE_CONFIG.appId
+  if (!apiKey || !projectId || !appId) return null
   return {
-    apiKey: env.FIREBASE_API_KEY,
+    apiKey,
     authDomain:
-      env.FIREBASE_AUTH_DOMAIN || `${env.FIREBASE_PROJECT_ID}.firebaseapp.com`,
-    projectId: env.FIREBASE_PROJECT_ID,
-    appId: env.FIREBASE_APP_ID,
+      env.FIREBASE_AUTH_DOMAIN ||
+      (env.FIREBASE_PROJECT_ID
+        ? `${env.FIREBASE_PROJECT_ID}.firebaseapp.com`
+        : DEFAULT_FIREBASE_CONFIG.authDomain),
+    projectId,
+    appId,
   }
 }
 
@@ -160,12 +176,14 @@ export async function verifyFirebaseUser(
   const token = bearer(request)
   if (!token) return null
 
-  const hit = verified.get(token)
+  // Keyed by project too: the same token string is not valid everywhere.
+  const key = `${config.projectId}:${token}`
+  const hit = verified.get(key)
   if (hit && hit.expires > Date.now()) return hit.user
 
   const claims = await verifyIdToken(token, config.projectId)
   if (!claims || !claims.sub) {
-    verified.set(token, { user: null, expires: Date.now() + 30_000 })
+    verified.set(key, { user: null, expires: Date.now() + 30_000 })
     return null
   }
   // A Google account's address is verified; anything else is not trusted.
@@ -176,7 +194,7 @@ export async function verifyFirebaseUser(
     email: claims.email,
     name: claims.name || claims.email,
   }
-  verified.set(token, {
+  verified.set(key, {
     user,
     expires: Math.min(claims.exp! * 1000, Date.now() + 5 * 60 * 1000),
   })

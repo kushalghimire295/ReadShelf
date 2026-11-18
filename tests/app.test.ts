@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { generateKeyPairSync, sign } from 'node:crypto'
 import { Miniflare } from 'miniflare'
 import { createApp, type Env } from '../src/worker/app'
-import { resetVerificationCache, verifyFirebaseUser } from '../src/worker/firebase'
+import { resetVerificationCache, firebaseConfig, verifyFirebaseUser } from '../src/worker/firebase'
 
 const runtime = new Miniflare({
   workers: [
@@ -145,8 +145,11 @@ test('the status is public but the shelf is not', async () => {
   expect(status).toMatchObject({
     database: true,
     storage: true,
-    firebase: false,
-    firebaseConfig: null,
+    firebase: true,
+    firebaseConfig: {
+      projectId: 'readshelf-1ca03',
+      authDomain: 'readshelf-1ca03.firebaseapp.com',
+    },
   })
 
   // Without a token there is no user and no data.
@@ -546,15 +549,14 @@ test('Firebase ID tokens are verified against the project', async () => {
         firebaseEnv,
       ),
     ).toBeNull()
-    // With no Firebase project configured nobody can be authenticated.
+    // The built-in project is used unless the environment names another one.
     expect(
-      await verifyFirebaseUser(
-        new Request('https://app.example.test/api/me', {
-          headers: { Authorization: `Bearer ${makeToken()}` },
-        }),
-        { ...firebaseEnv, FIREBASE_PROJECT_ID: undefined },
-      ),
-    ).toBeNull()
+      firebaseConfig({ FIREBASE_PROJECT_ID: 'other-project' }),
+    ).toMatchObject({
+      projectId: 'other-project',
+      authDomain: 'other-project.firebaseapp.com',
+      apiKey: 'AIzaSyDzjVB3mb8gXZ3tMeSSxV_kKNwPBJU6NQY',
+    })
 
     // The real app refuses the shelf for a token it cannot verify.
     const realApp = createApp()

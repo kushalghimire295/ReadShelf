@@ -27,34 +27,29 @@ bun run typecheck
 bun run build
 ```
 
-Open the URL printed by Vite. Sign-in needs a Firebase web app (below); until
-the three `FIREBASE_*` values are set the gate lists the exact steps.
+Open the URL printed by Vite. Google sign-in works with no setup: the public
+Firebase web config (project `readshelf-1ca03`) is built into
+`src/worker/firebase.ts` and served to the browser by `/api/status`.
 
 ## Sign-in with Firebase
 
-1. In the [Firebase console](https://console.firebase.google.com) create a
-   project (Google Analytics is not needed).
-2. **Authentication → Get started → Sign-in method → Google**, enable it and
-   pick a support email. This creates the Google OAuth client for you.
-3. **Project settings → Your apps → Web (`</>`)** — register the app and copy
-   `apiKey`, `authDomain`, `projectId` and `appId`.
-4. **Authentication → Settings → Authorized domains**: `localhost` is allowed
-   by default; add your deployed domain.
+Google sign-in is the only identity provider. The browser signs in with the
+Firebase SDK and sends the ID token; the Worker verifies it itself.
 
-Then, locally:
+The project is `readshelf-1ca03` — **Authentication → Sign-in method → Google**
+is enabled, and `localhost` is an authorized domain. To host elsewhere, add that
+domain under **Authentication → Settings → Authorized domains**.
 
-```
-FIREBASE_API_KEY=AIzaSy...
-FIREBASE_PROJECT_ID=readshelf-1234
-FIREBASE_APP_ID=1:1234567890:web:abcdef123456
-FIREBASE_AUTH_DOMAIN=readshelf-1234.firebaseapp.com
-```
+These values are public web-app settings, not an admin key: no service account,
+private key or secret is involved, so they are committed rather than configured
+per environment. To point the site at a different Firebase project, set
+`FIREBASE_API_KEY`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID` and (optionally)
+`FIREBASE_AUTH_DOMAIN` in `.dev.vars` or as project secrets; they override the
+built-in ones.
 
-Put them in `.dev.vars` (gitignored) and restart the dev server. These are
-public web-app values, not an admin key: no service account, private key or
-secret is involved. Nothing is sent to a third-party auth API at request time —
-the Worker validates the token signature locally and checks `aud` (project id),
-`iss`, `exp`, `iat` and the verified email.
+Nothing is sent to a third-party auth API at request time — the Worker
+validates the token signature against Google's published keys and checks `aud`
+(project id), `iss`, `exp`, `iat` and the verified email.
 
 ## Where things live
 
@@ -96,9 +91,8 @@ and scope ownership by the verified uid; mutations reject foreign origins.
 
 1. Create/inspect the site and target preview first.
 2. `sites_add_storage` for D1 as `DB` **and** R2 as `FILES`.
-3. Set `FIREBASE_API_KEY`, `FIREBASE_PROJECT_ID` and `FIREBASE_APP_ID` (and
-   `FIREBASE_AUTH_DOMAIN` if it is not `<project>.firebaseapp.com`) as project
-   secrets.
+3. No Firebase secrets to set: the web config is built in. Add the deployed
+   origin under Firebase's authorized domains.
 4. Add the deployed origin to Firebase's authorized domains.
 5. Build and deploy with `sites_deploy` and `deploy.json`.
 

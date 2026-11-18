@@ -58,6 +58,33 @@ export async function signInWithGoogle(): Promise<void> {
   token = await result.user.getIdToken()
 }
 
+/** Turns Firebase's error codes into something a reader can act on. */
+export function describeAuthError(error: unknown): string {
+  const code =
+    typeof error === 'object' && error && 'code' in error
+      ? String((error as { code: unknown }).code)
+      : ''
+  switch (code) {
+    case 'auth/configuration-not-found':
+      return 'Google sign-in is not switched on for this Firebase project yet. In the Firebase console open Authentication, then Sign-in method, and enable Google.'
+    case 'auth/operation-not-allowed':
+      return 'The Google provider is disabled in the Firebase project.'
+    case 'auth/unauthorized-domain':
+      return `This address (${window.location.hostname}) is not authorized in the Firebase project. Add it under Authentication → Settings → Authorized domains.`
+    case 'auth/popup-blocked':
+      return 'The browser blocked the Google window. Allow pop-ups for this site, then try again.'
+    case 'auth/popup-closed-by-user':
+    case 'auth/cancelled-popup-request':
+      return 'The Google window closed before sign-in finished.'
+    case 'auth/network-request-failed':
+      return 'Could not reach Google. Check your connection and try again.'
+    default:
+      return error instanceof Error && error.message
+        ? error.message
+        : 'Could not reach Google. Please try again.'
+  }
+}
+
 export async function signOut(): Promise<void> {
   token = null
   if (auth) await firebaseSignOut(auth).catch(() => undefined)

@@ -1,10 +1,12 @@
-# Copy to .dev.vars to enable Google sign-in through Firebase.
+# Google sign-in runs on Firebase (readshelf-1ca03). Its web config is public,
+# so the values live in src/worker/firebase.ts and work without this file.
+#
+# Copy to .dev.vars only to point the site at a different Firebase project.
 # Firebase console -> Project settings -> Your apps -> Web app -> SDK setup.
 # Authentication -> Sign-in method: enable Google.
-# Authentication -> Settings -> Authorized domains: add http://localhost and
-# your deployed origin.
+# Authentication -> Settings -> Authorized domains: add your deployed origin
+# (localhost is already authorized).
 
-# Public web app values; the browser uses them to start sign-in.
 # FIREBASE_API_KEY=AIzaSy...
 # FIREBASE_PROJECT_ID=readshelf-1234
 # FIREBASE_APP_ID=1:1234567890:web:abcdef123456

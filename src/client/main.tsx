@@ -4,6 +4,7 @@ import type { Item, Status, User, Visibility } from '../shared/types'
 import {
   accessToken,
   currentUser,
+  describeAuthError,
   initFirebase,
   signInWithGoogle,
   signOut,
@@ -180,7 +181,7 @@ function SignIn({ status }: { status: Status }) {
     try {
       await signInWithGoogle()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not reach Google.')
+      setError(describeAuthError(e))
       setBusy(false)
     }
   }
@@ -198,39 +199,14 @@ function SignIn({ status }: { status: Status }) {
           reads you make public show up on Home.
         </p>
 
-        {status.firebase ? (
-          <button
-            type="button"
-            className="primary gate-button"
-            disabled={busy}
-            onClick={() => void start()}
-          >
-            {busy ? 'Opening Google…' : 'Continue with Google'}
-          </button>
-        ) : (
-          <div className="signin">
-            <p className="notice">
-              Google sign-in is not connected yet. Add your Firebase web app and
-              reload this page.
-            </p>
-            <ol className="gate-steps">
-              <li>
-                In the Firebase console create a project, then add a Web app and
-                enable Google under Authentication → Sign-in method.
-              </li>
-              <li>
-                Add <code>{window.location.origin}</code> under Authentication →
-                Settings → Authorized domains (localhost is there already).
-              </li>
-              <li>
-                Set <code>FIREBASE_API_KEY</code>, <code>FIREBASE_PROJECT_ID</code>{' '}
-                and <code>FIREBASE_APP_ID</code> (plus{' '}
-                <code>FIREBASE_AUTH_DOMAIN</code> if you use a custom one) in{' '}
-                <code>.dev.vars</code>, then restart the server.
-              </li>
-            </ol>
-          </div>
-        )}
+        <button
+          type="button"
+          className="primary gate-button"
+          disabled={busy}
+          onClick={() => void start()}
+        >
+          {busy ? 'Opening Google…' : 'Continue with Google'}
+        </button>
 
         {error && (
           <p role="alert" className="error">
