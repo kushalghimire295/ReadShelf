@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { Miniflare } from 'miniflare'
-import { createApp } from '../src/worker/app'
-import type { Env } from '../src/worker/auth'
+import { createApp, type Env } from '../src/worker/app'
 
 const runtime = new Miniflare({
   workers: [
@@ -35,7 +34,6 @@ beforeAll(async () => {
   env = {
     DB: db as unknown as D1Database,
     FILES: bucket as unknown as R2Bucket,
-    APP_ORIGIN: 'https://app.example.test',
     ASSETS: {
       fetch: async () => new Response('public page'),
     } as unknown as Fetcher,
@@ -43,29 +41,22 @@ beforeAll(async () => {
 }, 20_000)
 afterAll(() => runtime.dispose())
 
-// This identity seam exists only in the app factory. The Worker entrypoint
-// never reads these test headers and always calls the real auth SDK.
-const app = createApp(async (request) => {
-  const sub = request.headers.get('test-user')
-  return sub ? { sub, name: sub === 'alice' ? 'Alice' : 'Bob' } : null
-})
+const app = createApp()
+const ORIGIN = 'https://app.example.test'
 
-const call = (
-  path: string,
-  user?: string,
-  method = 'GET',
-  body?: unknown,
-  origin = env.APP_ORIGIN!,
-) =>
+/** Each test starts from an empty shelf so counts mean what they say. */
+async function reset() {
+  // A shelf request also creates the schema on the very first call.
+  await call('/api/items')
+  await env.DB!.prepare('DELETE FROM items').run()
+}
+
+const call = (path: string, method = 'GET', body?: unknown) =>
   app.request(
-    `https://app.example.test${path}`,
+    `${ORIGIN}${path}`,
     {
       method,
-      headers: {
-        ...(user ? { 'test-user': user } : {}),
-        Origin: origin,
-        'Content-Type': 'application/json',
-      },
+      headers: { Origin: ORIGIN, 'Content-Type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     },
     env,
@@ -77,7 +68,6 @@ type Upload = {
   mime?: string
   bytes?: number[]
   name?: string
-  user?: string
   origin?: string
   cover?: { mime: string; bytes?: number[] }
 }
@@ -88,8 +78,7 @@ function upload({
   mime = 'application/pdf',
   bytes = [37, 80, 68, 70, 45, 49],
   name = 'notes.pdf',
-  user = 'alice',
-  origin = env.APP_ORIGIN!,
+  origin = ORIGIN,
   cover,
 }: Upload = {}) {
   const form = new FormData()
@@ -107,59 +96,34 @@ function upload({
   form.append('title', title)
   form.append('visibility', visibility)
   return app.request(
-    'https://app.example.test/api/items',
-    {
-      method: 'POST',
-      headers: { ...(user ? { 'test-user': user } : {}), Origin: origin },
-      body: form,
-    },
+    `${ORIGIN}/api/items`,
+    { method: 'POST', headers: { Origin: origin }, body: form },
     env,
   )
 }
 
-const items = async (path: string, user: string) =>
-  ((await (await call(path, user)).json()) as { items: { id: string; title: string }[] })
-    .items
+const list = async (path: string) =>
+  ((await (await call(path)).json()) as { items: { title: string }[] }).items
 
-test('signed-out callers cannot read shelves, feeds or files', async () => {
-  for (const [path, method] of [
-    ['/api/feed', 'GET'],
-    ['/api/items', 'GET'],
-    ['/api/items', 'POST'],
-    ['/api/items/absent', 'PATCH'],
-    ['/api/items/absent', 'DELETE'],
-    ['/api/items/absent/file', 'GET'],
-  ]) {
-    const response = await call(path!, undefined, method)
-    expect(response.status).toBe(401)
-    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
-  }
-  expect(await (await call('/')).text()).toBe('public page')
+test('status reports the storage bindings and nothing about accounts', async () => {
+  const status = (await (await call('/api/status')).json()) as Record<
+    string,
+    unknown
+  >
+  expect(status).toEqual({ database: true, storage: true })
+
+  const noDb = await app.request(`${ORIGIN}/api/status`, {}, { ...env, DB: undefined })
+  expect(await noDb.json()).toEqual({ database: false, storage: true })
+  expect(
+    (await app.request(`${ORIGIN}/api/items`, {}, { ...env, DB: undefined }))
+      .status,
+  ).toBe(503)
   expect((await call('/api/health')).status).toBe(200)
+  expect(await (await call('/')).text()).toBe('public page')
 })
 
-test('private uploads are only visible to their owner', async () => {
-  const response = await upload({ visibility: 'private', title: 'Private diary' })
-  expect(response.status).toBe(201)
-  const { item } = (await response.json()) as { item: { id: string } }
-
-  expect((await items('/api/items', 'alice')).map((entry) => entry.title)).toEqual([
-    'Private diary',
-  ])
-  expect(await items('/api/items', 'bob')).toHaveLength(0)
-  expect(await items('/api/feed', 'bob')).toHaveLength(0)
-
-  expect((await call(`/api/items/${item.id}/file`, 'bob')).status).toBe(404)
-  const own = await call(`/api/items/${item.id}/file`, 'alice')
-  expect(own.status).toBe(200)
-  expect(own.headers.get('Content-Type')).toBe('application/pdf')
-  expect(own.headers.get('Cache-Control')).toContain('no-store')
-  expect(new Uint8Array(await own.arrayBuffer())).toEqual(
-    new Uint8Array([37, 80, 68, 70, 45, 49]),
-  )
-})
-
-test('public uploads surface in other feeds and serve their bytes', async () => {
+test('public uploads appear on the Home feed and the shelf', async () => {
+  await reset()
   const response = await upload({
     title: 'Shared sketch',
     mime: 'image/png',
@@ -171,67 +135,73 @@ test('public uploads surface in other feeds and serve their bytes', async () => 
     item: { id: string; kind: string; visibility: string }
   }
   expect(item).toMatchObject({ kind: 'image', visibility: 'public' })
-  expect(item).not.toHaveProperty('reach')
 
-  expect((await items('/api/feed', 'bob')).map((entry) => entry.title)).toEqual([
+  expect((await list('/api/feed')).map((entry) => entry.title)).toEqual([
     'Shared sketch',
   ])
-  // The owner sees their own work on their shelf, not in their own feed.
-  expect(await items('/api/feed', 'alice')).toHaveLength(0)
+  expect((await list('/api/items')).map((entry) => entry.title)).toEqual([
+    'Shared sketch',
+  ])
 
-  const file = await call(`/api/items/${item.id}/file`, 'bob')
+  const file = await call(`/api/items/${item.id}/file`)
   expect(file.status).toBe(200)
   expect(file.headers.get('Content-Type')).toBe('image/png')
   expect(file.headers.get('Content-Disposition')).toContain('inline')
   expect(new Uint8Array(await file.arrayBuffer())).toEqual(
     new Uint8Array([137, 80, 78, 71]),
   )
-
-  // Public simply means public: no percentage gates the feed.
-  await upload({ title: 'Second read' })
-  expect((await items('/api/feed', 'bob')).map((entry) => entry.title)).toEqual([
-    'Second read',
-    'Shared sketch',
-  ])
 })
 
-test('sharing can change and deleting removes the stored file', async () => {
-  const before = (await items('/api/feed', 'bob')).length
+test('private uploads stay off the feed but remain readable', async () => {
+  await reset()
+  const created = (await (
+    await upload({ title: 'Private diary', visibility: 'private' })
+  ).json()) as { item: { id: string; visibility: string } }
+  expect(created.item.visibility).toBe('private')
+
+  expect(await list('/api/feed')).toHaveLength(0)
+  expect((await list('/api/items')).map((entry) => entry.title)).toEqual([
+    'Private diary',
+  ])
+
+  const file = await call(`/api/items/${created.item.id}/file`)
+  expect(file.status).toBe(200)
+  expect(file.headers.get('Cache-Control')).toContain('no-store')
+})
+
+test('sharing flips feed membership and deleting removes the stored file', async () => {
+  await reset()
   const created = (await (
     await upload({ title: 'Move me' })
   ).json()) as { item: { id: string } }
-  expect(await items('/api/feed', 'bob')).toHaveLength(before + 1)
+  expect(await list('/api/feed')).toHaveLength(1)
 
-  const hidden = await call(`/api/items/${created.item.id}`, 'alice', 'PATCH', {
+  const hidden = await call(`/api/items/${created.item.id}`, 'PATCH', {
     visibility: 'private',
   })
   expect(hidden.status).toBe(200)
   expect(await hidden.json()).toMatchObject({
     item: { visibility: 'private' },
   })
-  expect(await items('/api/feed', 'bob')).toHaveLength(before)
-  expect((await call(`/api/items/${created.item.id}/file`, 'bob')).status).toBe(
-    404,
-  )
+  expect(await list('/api/feed')).toHaveLength(0)
 
-  const reshared = await call(`/api/items/${created.item.id}`, 'alice', 'PATCH', {
+  const reshared = await call(`/api/items/${created.item.id}`, 'PATCH', {
     visibility: 'public',
     title: 'Move me again',
   })
   expect(await reshared.json()).toMatchObject({
     item: { visibility: 'public', title: 'Move me again' },
   })
+  expect((await list('/api/feed')).map((entry) => entry.title)).toEqual([
+    'Move me again',
+  ])
 
-  expect(
-    (await call(`/api/items/${created.item.id}`, 'bob', 'DELETE')).status,
-  ).toBe(404)
-  expect(
-    (await call(`/api/items/${created.item.id}`, 'alice', 'DELETE')).status,
-  ).toBe(200)
-  expect(await items('/api/items', 'alice')).not.toContainEqual(
-    expect.objectContaining({ id: created.item.id }),
+  expect((await call(`/api/items/${created.item.id}`, 'DELETE')).status).toBe(
+    200,
   )
-  expect((await call(`/api/items/${created.item.id}/file`, 'alice')).status).toBe(
+  expect(await list('/api/items')).toHaveLength(0)
+  expect((await call(`/api/items/${created.item.id}/file`)).status).toBe(404)
+  expect((await call(`/api/items/${created.item.id}`, 'DELETE')).status).toBe(
     404,
   )
 })
@@ -239,9 +209,9 @@ test('sharing can change and deleting removes the stored file', async () => {
 test('rejects unsupported types, bad metadata, foreign origins and huge uploads', async () => {
   // Bun's FormData derives the part type from the filename, so these use
   // matching names; the server sees text/html and application/zip.
-  expect(
-    (await upload({ mime: 'text/html', name: 'page.html' })).status,
-  ).toBe(415)
+  expect((await upload({ mime: 'text/html', name: 'page.html' })).status).toBe(
+    415,
+  )
   expect((await upload({ mime: 'application/zip', name: 'a.zip' })).status).toBe(
     415,
   )
@@ -255,12 +225,8 @@ test('rejects unsupported types, bad metadata, foreign origins and huge uploads'
   expect(
     (
       await app.request(
-        'https://app.example.test/api/items',
-        {
-          method: 'POST',
-          headers: { 'test-user': 'alice', Origin: env.APP_ORIGIN! },
-          body: noFile,
-        },
+        `${ORIGIN}/api/items`,
+        { method: 'POST', headers: { Origin: ORIGIN }, body: noFile },
         env,
       )
     ).status,
@@ -271,61 +237,53 @@ test('rejects unsupported types, bad metadata, foreign origins and huge uploads'
     { title: '' },
     { visibility: 'shared' },
     { reach: 25 },
-    { owner_sub: 'bob' },
+    { owner_sub: 'someone' },
   ]) {
-    expect(
-      (await call('/api/items/whatever', 'alice', 'PATCH', body)).status,
-    ).toBe(400)
+    expect((await call('/api/items/whatever', 'PATCH', body)).status).toBe(400)
   }
 })
 
-test('opens are counted per permitted reader and ranked, private items excluded', async () => {
+test('opens are counted and rank public reads only', async () => {
+  await reset()
   const leader = (await (
     await upload({ title: 'Ranked read' })
   ).json()) as { item: { id: string; opens: number } }
   expect(leader.item.opens).toBe(0)
 
-  const open = (id: string, user: string) =>
-    call(`/api/items/${id}/open`, user, 'POST')
-  expect((await open(leader.item.id, 'bob')).status).toBe(200)
-  expect((await open(leader.item.id, 'bob')).status).toBe(200)
-  expect(await (await open(leader.item.id, 'alice')).json()).toEqual({
-    opens: 3,
-  })
+  const open = (id: string) => call(`/api/items/${id}/open`, 'POST')
+  expect((await open(leader.item.id)).status).toBe(200)
+  expect(await (await open(leader.item.id)).json()).toEqual({ opens: 2 })
 
   const runnerUp = (await (
     await upload({ title: 'Runner up' })
   ).json()) as { item: { id: string } }
-  expect((await open(runnerUp.item.id, 'bob')).status).toBe(200)
+  expect((await open(runnerUp.item.id)).status).toBe(200)
 
   const privateItem = (await (
     await upload({ title: 'Secret notes', visibility: 'private' })
   ).json()) as { item: { id: string } }
-  // Someone else cannot open it, and it never enters the public ranking.
-  expect((await open(privateItem.item.id, 'bob')).status).toBe(404)
-  expect((await open(privateItem.item.id, 'alice')).status).toBe(200)
+  expect((await open(privateItem.item.id)).status).toBe(200)
 
-  const ranking = (await (
-    await call('/api/popular', 'bob')
-  ).json()) as { items: { title: string; opens: number }[] }
-  expect(ranking.items.map((entry) => entry.title).slice(0, 2)).toEqual([
+  const ranking = (await (await call('/api/popular')).json()) as {
+    items: { title: string; opens: number }[]
+  }
+  expect(ranking.items.map((entry) => entry.title)).toEqual([
     'Ranked read',
     'Runner up',
   ])
-  expect(ranking.items[0]!.opens).toBe(3)
-  expect(ranking.items.map((entry) => entry.title)).not.toContain(
-    'Secret notes',
-  )
-  // Own public opens still show on the shelf, with the fresh count.
-  const shelf = (await (
-    await call('/api/items', 'alice')
-  ).json()) as { items: { title: string; opens: number }[] }
+  expect(ranking.items[0]!.opens).toBe(2)
+
+  // A private read still shows its own opens on the shelf.
+  const shelf = (await (await call('/api/items')).json()) as {
+    items: { title: string; opens: number }[]
+  }
   expect(shelf.items.find((entry) => entry.title === 'Secret notes')?.opens).toBe(
     1,
   )
 })
 
-test('a separate cover image is stored, served and access-checked', async () => {
+test('a separate cover image is stored, served and optional', async () => {
+  await reset()
   const covered = (await (
     await upload({
       title: 'Covered read',
@@ -334,7 +292,7 @@ test('a separate cover image is stored, served and access-checked', async () => 
   ).json()) as { item: { id: string; hasCover: boolean } }
   expect(covered.item.hasCover).toBe(true)
 
-  const cover = await call(`/api/items/${covered.item.id}/cover`, 'alice')
+  const cover = await call(`/api/items/${covered.item.id}/cover`)
   expect(cover.status).toBe(200)
   expect(cover.headers.get('Content-Type')).toBe('image/png')
   expect(new Uint8Array(await cover.arrayBuffer())).toEqual(
@@ -345,203 +303,29 @@ test('a separate cover image is stored, served and access-checked', async () => 
     item: { id: string; hasCover: boolean }
   }
   expect(plain.item.hasCover).toBe(false)
-  expect((await call(`/api/items/${plain.item.id}/cover`, 'alice')).status).toBe(
-    404,
-  )
+  expect((await call(`/api/items/${plain.item.id}/cover`)).status).toBe(404)
 
-  // A cover has to be an image, and private covers stay private.
   expect(
     (await upload({ title: 'Bad cover', cover: { mime: 'application/pdf' } }))
       .status,
   ).toBe(415)
-  const hidden = (await (
-    await upload({
-      title: 'Hidden cover',
-      visibility: 'private',
-      cover: { mime: 'image/jpeg' },
-    })
-  ).json()) as { item: { id: string } }
-  expect((await call(`/api/items/${hidden.item.id}/cover`, 'bob')).status).toBe(
-    404,
-  )
-  expect(
-    (await call(`/api/items/${hidden.item.id}/cover`, 'alice')).status,
-  ).toBe(200)
 })
 
-test('missing storage or database reports setup', async () => {
+test('missing database or bucket reports setup instead of failing', async () => {
   expect(
     (
       await app.request(
-        'https://app.example.test/api/items',
-        { headers: { 'test-user': 'alice' } },
-        { ...env, DB: undefined },
+        `${ORIGIN}/api/items`,
+        { method: 'POST', headers: { Origin: ORIGIN } },
+        { ...env, FILES: undefined },
       )
     ).status,
   ).toBe(503)
-  const noBucket = (await (
-    await app.request(
-      'https://app.example.test/api/session',
-      { headers: { 'test-user': 'alice' } },
-      { ...env, FILES: undefined },
-    )
-  ).json()) as { storage: boolean }
-  expect(noBucket.storage).toBe(false)
-  expect(
-    (
-      await app.request(
-        'https://app.example.test/api/feed',
-        { headers: { 'test-user': 'alice' } },
-        { ...env, DB: undefined },
-      )
-    ).status,
-  ).toBe(503)
-})
 
-test('Google sign-in starts at Google and only accepts a matching state', async () => {
-  const origin = 'https://app.example.test'
-  const hosted: Env = {
-    ...env,
-    APP_ORIGIN: origin,
-    SESSION_SECRET: 'test-secret-that-is-long-enough',
-    GOOGLE_CLIENT_ID: 'client-id.apps.googleusercontent.com',
-    GOOGLE_CLIENT_SECRET: 'client-secret',
-  }
-  const sessionApp = createApp()
-
-  const start = await sessionApp.request(`${origin}/api/auth/google`, {}, hosted)
-  expect(start.status).toBe(303)
-  const location = new URL(start.headers.get('Location')!)
-  expect(location.origin).toBe('https://accounts.google.com')
-  expect(location.searchParams.get('redirect_uri')).toBe(
-    `${origin}/api/auth/google/callback`,
-  )
-  expect(location.searchParams.get('scope')).toBe('openid email profile')
-  expect(location.searchParams.get('prompt')).toBe('select_account')
-  const state = location.searchParams.get('state')!
-  expect(state).toMatch(/^[0-9a-f]{32}$/)
-  const stateCookie = (start.headers.get('Set-Cookie') ?? '').split(';')[0]!
-  expect(stateCookie.startsWith('readshelf_oauth_state=')).toBe(true)
-
-  // A callback carrying a different state is refused before any token call.
-  const forged = await sessionApp.request(
-    `${origin}/api/auth/google/callback?code=abc&state=deadbeef`,
-    { headers: { Cookie: stateCookie } },
-    hosted,
-  )
-  expect(forged.status).toBe(303)
-  expect(forged.headers.get('Location')).toContain('authError=')
-  expect((await sessionApp.request(`${origin}/api/session`, {}, hosted)).status).toBe(
-    200,
-  )
-
-  // Without configuration the start route bounces back to the gate.
-  const off = await sessionApp.request(
-    `${origin}/api/auth/google`,
+  const page = await app.request(
+    `${ORIGIN}/`,
     {},
-    { ...hosted, GOOGLE_CLIENT_ID: undefined, GOOGLE_CLIENT_SECRET: undefined },
+    { ...env, DB: undefined, ASSETS: env.ASSETS },
   )
-  expect(off.headers.get('Location')).toBe('/?authError=google-unavailable')
-
-  const session = (await (
-    await sessionApp.request(`${origin}/api/session`, {}, hosted)
-  ).json()) as { google: boolean }
-  expect(session.google).toBe(true)
-})
-
-test('a Google callback signs the reader in and sign-out revokes the session', async () => {
-  const origin = 'https://app.example.test'
-  const hosted: Env = {
-    ...env,
-    APP_ORIGIN: origin,
-    SESSION_SECRET: 'test-secret-that-is-long-enough',
-    GOOGLE_CLIENT_ID: 'client-id.apps.googleusercontent.com',
-    GOOGLE_CLIENT_SECRET: 'client-secret',
-  }
-  const sessionApp = createApp()
-  const start = await sessionApp.request(`${origin}/api/auth/google`, {}, hosted)
-  const state = new URL(start.headers.get('Location')!).searchParams.get('state')!
-  const stateCookie = (start.headers.get('Set-Cookie') ?? '').split(';')[0]!
-
-  // Stand in for Google's token and userinfo endpoints.
-  const realFetch = globalThis.fetch.bind(globalThis)
-  const seen: string[] = []
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url =
-      typeof input === 'string'
-        ? input
-        : input instanceof URL
-          ? input.toString()
-          : input.url
-    seen.push(url)
-    if (url === 'https://oauth2.googleapis.com/token') {
-      const form = new URLSearchParams(String(init?.body ?? ''))
-      if (form.get('grant_type') !== 'authorization_code')
-        return new Response('bad grant', { status: 400 })
-      return Response.json({ access_token: 'google-access-token' })
-    }
-    if (url === 'https://openidconnect.googleapis.com/v1/userinfo')
-      return Response.json({
-        email: 'Reader@Gmail.com',
-        email_verified: true,
-        name: 'Real Reader',
-      })
-    return realFetch(input as RequestInfo, init)
-  }) as typeof fetch
-
-  try {
-    const callback = await sessionApp.request(
-      `${origin}/api/auth/google/callback?code=good-code&state=${state}`,
-      { headers: { Cookie: stateCookie } },
-      hosted,
-    )
-    expect(callback.status).toBe(303)
-    expect(callback.headers.get('Location')).toBe('/')
-    expect(seen).toContain('https://oauth2.googleapis.com/token')
-    expect(seen).toContain('https://openidconnect.googleapis.com/v1/userinfo')
-
-    const cookies = (callback.headers.get('Set-Cookie') ?? '')
-      .split(',')
-      .map((part) => part.split(';')[0]!.trim())
-    const sessionCookie = cookies.find((part) =>
-      part.startsWith('readshelf_session='),
-    )
-    expect(sessionCookie).toBeDefined()
-    expect(callback.headers.get('Set-Cookie')).toContain('HttpOnly')
-
-    const session = (await (
-      await sessionApp.request(
-        `${origin}/api/session`,
-        { headers: { Cookie: sessionCookie! } },
-        hosted,
-      )
-    ).json()) as { user: { email: string; name: string } | null }
-    // The address is normalised, so one Google account is one shelf.
-    expect(session.user).toMatchObject({
-      email: 'reader@gmail.com',
-      name: 'Real Reader',
-    })
-
-    const shelf = await sessionApp.request(
-      `${origin}/api/items`,
-      { headers: { Cookie: sessionCookie! } },
-      hosted,
-    )
-    expect(shelf.status).toBe(200)
-
-    const signOut = await sessionApp.request(
-      `${origin}/api/auth/signout`,
-      { method: 'POST', headers: { Origin: origin, Cookie: sessionCookie! } },
-      hosted,
-    )
-    expect(signOut.status).toBe(303)
-    const after = await sessionApp.request(
-      `${origin}/api/session`,
-      { headers: { Cookie: sessionCookie! } },
-      hosted,
-    )
-    expect(((await after.json()) as { user: unknown }).user).toBeNull()
-  } finally {
-    globalThis.fetch = realFetch
-  }
+  expect(await page.text()).toBe('public page')
 })

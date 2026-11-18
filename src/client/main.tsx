@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { Item, Session, Visibility } from '../shared/types'
+import type { Item, Status, Visibility } from '../shared/types'
 import './style.css'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -155,72 +155,8 @@ function Thumb({ item, big = false }: { item: Item; big?: boolean }) {
   )
 }
 
-function SignIn({ session }: { session: Session }) {
-  const [error] = useState(
-    () =>
-      new URLSearchParams(window.location.search).get('authError') ||
-      (session.google ? '' : 'google-unavailable'),
-  )
-
-  return (
-    <main className="gate">
-      <div className="gate-card">
-        <span className="wordmark">
-          <span className="mark" aria-hidden="true" />
-          Readshelf
-        </span>
-        <h1>Sign in to Readshelf.</h1>
-        <p className="lede">
-          Continue with the Google account on your phone or computer. Your first
-          sign-in creates your account.
-        </p>
-
-        {session.google ? (
-          <a className="primary button gate-button" href="/api/auth/google">
-            Continue with Google
-          </a>
-        ) : (
-          <div className="signin">
-            <p className="notice">
-              Google sign-in is not set up yet. Add your Google OAuth client and
-              reload this page.
-            </p>
-            <ol className="gate-steps">
-              <li>
-                In Google Cloud Console, create an OAuth client (Web application)
-                and enable the Google sign-in / OpenID scopes.
-              </li>
-              <li>
-                Add this exact redirect URI:{' '}
-                <code>{`${window.location.origin}/api/auth/google/callback`}</code>
-              </li>
-              <li>
-                Set <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>,
-                <code> APP_ORIGIN</code> ({window.location.origin}) and a long{' '}
-                <code>SESSION_SECRET</code>, then restart the server.
-              </li>
-            </ol>
-          </div>
-        )}
-
-        {error && error !== 'google-unavailable' && (
-          <p role="alert" className="error">
-            {error}
-          </p>
-        )}
-
-        <ul className="gate-points">
-          <li>Private by default — only you can open your own files.</li>
-          <li>Public reads can surface on other readers’ Home feeds.</li>
-          <li>“Most opened” ranks public reads by how often they’re opened.</li>
-        </ul>
-      </div>
-    </main>
-  )
-}
-
 function App() {
-  const [session, setSession] = useState<Session | null>(null)
+  const [status, setStatus] = useState<Status | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [view, setView] = useState<View>('home')
   const [feed, setFeed] = useState<Item[]>([])
@@ -250,9 +186,7 @@ function App() {
     document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light',
   )
 
-  const enabled = Boolean(
-    loaded && session?.user && session.database && session.storage,
-  )
+  const enabled = Boolean(loaded && status?.database && status.storage)
 
   // My Adds is alphabetical; the toggle flips the direction.
   const shelfSorted = useMemo(
@@ -318,10 +252,10 @@ function App() {
     let live = true
     void (async () => {
       try {
-        const current = await request<Session>('/api/session')
+        const current = await request<Status>('/api/status')
         if (!live) return
-        setSession(current)
-        if (current.user && current.database && current.storage) {
+        setStatus(current)
+        if (current.database && current.storage) {
           await Promise.all([loadFeed(), loadPopular(), loadShelf()])
         }
       } catch (e) {
@@ -381,7 +315,7 @@ function App() {
       setNotice(
         result.item.visibility === 'public'
           ? 'Added to your shelf and shared publicly.'
-          : 'Added to your shelf. Only you can open it.',
+          : 'Added to your shelf. It stays off the Home feed.',
       )
       if (result.item.visibility === 'public') void loadFeed()
     } catch (e) {
@@ -429,8 +363,8 @@ function App() {
     if (ok)
       setNotice(
         next === 'private'
-          ? 'Now private — only you can open it.'
-          : 'Now public — it appears in other readers’ Home feeds.',
+          ? 'Now private — it stays off the Home feed.'
+          : 'Now public — it appears on the Home feed.',
       )
   }
 
@@ -511,8 +445,8 @@ function App() {
       </main>
     )
 
-  // A failed session check is not the same as being signed out.
-  if (!session)
+  // A failed status check is not the same as missing storage.
+  if (!status)
     return (
       <main className="gate">
         <div className="gate-card">
@@ -534,9 +468,6 @@ function App() {
         </div>
       </main>
     )
-
-  // The app is gated: nothing behind it renders until someone is signed in.
-  if (!session.user) return <SignIn session={session} />
 
   return (
     <main>
@@ -590,30 +521,12 @@ function App() {
           >
             {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
           </button>
-          <form
-            method="post"
-            action="/api/auth/signout"
-            onSubmit={async (event) => {
-              // Post without leaving the page first, then reload into the gate.
-              event.preventDefault()
-              await fetch('/api/auth/signout', { method: 'POST' }).catch(
-                () => undefined,
-              )
-              window.location.replace('/')
-            }}
-          >
-            <button type="submit" className="quiet small">
-              Sign out
-            </button>
-          </form>
         </div>
       </header>
 
       {!enabled && loaded && (
         <p className="notice">
-          {session && (!session.database || !session.storage)
-            ? 'Readshelf is still being set up. Uploading opens shortly.'
-            : 'Sign in to keep your own shelf.'}
+          Readshelf is still being set up. Uploading opens shortly.
         </p>
       )}
       {error && (

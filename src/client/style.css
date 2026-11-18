@@ -1082,32 +1082,6 @@ button.pill:hover {
   line-height: 1.5;
   color: var(--faint);
 }
-.gate-points {
-  list-style: none;
-  margin: 24px 0 0;
-  padding: 18px 0 0;
-  border-top: 1px solid var(--line);
-  display: grid;
-  gap: 9px;
-}
-.gate-points li {
-  position: relative;
-  padding-left: 15px;
-  font-size: 12.5px;
-  line-height: 1.45;
-  color: var(--muted);
-}
-.gate-points li::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 7px;
-  width: 5px;
-  height: 5px;
-  border-radius: 2px;
-  background: var(--accent);
-  opacity: 0.65;
-}
 .gate-loading {
   justify-items: start;
   text-align: left;
@@ -1117,44 +1091,6 @@ button.pill:hover {
 }
 .gate-card .error {
   margin-top: 16px;
-}
-.signin {
-  display: grid;
-  gap: 12px;
-  margin-top: 18px;
-}
-.signin .field {
-  gap: 6px;
-}
-.signin .field input {
-  width: 100%;
-  padding: 11px 13px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--field);
-  color: inherit;
-  font: inherit;
-  font-size: 15px;
-}
-.signin .field input:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-.signin .gate-button {
-  margin-top: 4px;
-}
-.gate-steps {
-  margin: 0;
-  padding-left: 20px;
-  display: grid;
-  gap: 8px;
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--muted);
-}
-.gate-steps code {
-  font-size: 11.5px;
-  overflow-wrap: anywhere;
 }
 
 /* ---------- most opened ---------- */

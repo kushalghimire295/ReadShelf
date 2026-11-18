@@ -1,27 +1,25 @@
 import { Hono, type Handler } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import type { ItemKind } from '../shared/types'
-import {
-  appOrigin,
-  clearSessionCookie,
-  clearStateCookie,
-  currentUser,
-  ensureAuthSchema,
-  finishGoogle,
-  googleAuthUrl,
-  googleEnabled,
-  isSameOrigin,
-  revokeSession,
-  type AuthUser,
-  type Env,
-} from './auth'
 import { ensureSchema, mapItem, type ItemRow } from './db'
+
+export type Env = {
+  ASSETS: Fetcher
+  DB?: D1Database
+  FILES?: R2Bucket
+}
 
 type AppContext = {
   Bindings: Env
-  Variables: { user: AuthUser; db: D1Database }
+  Variables: { db: D1Database }
 }
-type Authenticate = (request: Request, env: Env) => Promise<AuthUser | null>
+
+/**
+ * Readshelf has no accounts: everything on the shelf belongs to the reader
+ * using it. The owner columns stay for the one identity so rows remain
+ * self-describing.
+ */
+const VIEWER = { sub: 'local-reader', name: 'Reader' }
 
 const MAX_UPLOAD = 15 * 1024 * 1024
 const MAX_COVER = 5 * 1024 * 1024
@@ -89,133 +87,72 @@ function parseJson(body: unknown): { error: string } | { fields: JsonFields } {
   return { fields }
 }
 
-/** Tests inject identities; production always uses the session cookie. */
-export function createApp(authenticate: Authenticate = currentUser) {
+export function createApp() {
   const app = new Hono<AppContext>()
   app.get('/api/health', (c) => c.json({ ok: true }))
   app.use('/api/*', async (c, next) => {
     c.header('Cache-Control', 'private, no-store')
     await next()
   })
-  app.get('/api/session', async (c) =>
-    c.json({
-      user: await authenticate(c.req.raw, c.env),
-      mode: 'ready',
-      database: Boolean(c.env.DB),
-      storage: Boolean(c.env.FILES),
-      google: googleEnabled(c.env),
-    }),
+
+  app.get('/api/status', (c) =>
+    c.json({ database: Boolean(c.env.DB), storage: Boolean(c.env.FILES) }),
   )
 
-  /* ---------- auth ---------- */
-  const authGuard: Handler<AppContext> = async (c, next) => {
-    const origin = appOrigin(c.req.raw, c.env)
-    if (!origin || !isSameOrigin(c.req.raw, origin))
-      return c.json({ error: 'Cross-origin request refused.' }, 403)
-    if (!c.env.DB)
-      return c.json({ error: 'Sign-in is not set up yet.' }, 503)
-    await next()
-  }
-
-  app.post('/api/auth/signout', authGuard, async (c) => {
-    await revokeSession(c.req.raw, c.env)
-    return new Response(null, {
-      status: 303,
-      headers: { Location: '/', 'Set-Cookie': clearSessionCookie(c.req.raw) },
-    })
-  })
-
-  app.get('/api/auth/google', async (c) => {
-    const start = googleAuthUrl(c.req.raw, c.env)
-    if (!start) return c.redirect('/?authError=google-unavailable', 303)
-    return new Response(null, {
-      status: 303,
-      headers: { Location: start.location, 'Set-Cookie': start.cookie },
-    })
-  })
-
-  app.get('/api/auth/google/callback', async (c) => {
-    if (!c.env.DB) return c.redirect('/?authError=signin-unavailable', 303)
-    const result = await finishGoogle(c.env.DB, c.req.raw, c.env)
-    if (!result.ok)
-      return new Response(null, {
-        status: 303,
-        headers: {
-          Location: `/?authError=${encodeURIComponent(result.error)}`,
-          'Set-Cookie': clearStateCookie(c.req.raw),
-        },
-      })
-    const headers = new Headers({ Location: '/' })
-    headers.append('Set-Cookie', result.cookie)
-    headers.append('Set-Cookie', clearStateCookie(c.req.raw))
-    return new Response(null, { status: 303, headers })
-  })
-
   const guard: Handler<AppContext> = async (c, next) => {
-    const user = await authenticate(c.req.raw, c.env)
-    if (!user) return c.json({ error: 'Sign in required.' }, 401)
-    if (!['GET', 'HEAD'].includes(c.req.method)) {
-      const origin = appOrigin(c.req.raw, c.env)
-      if (!origin || !isSameOrigin(c.req.raw, origin))
-        return c.json({ error: 'Cross-origin request refused.' }, 403)
-    }
+    const origin = c.req.header('Origin')
+    if (origin && origin !== new URL(c.req.url).origin)
+      return c.json({ error: 'Cross-origin request refused.' }, 403)
     if (!c.env.DB)
       return c.json(
         { error: 'This app is still being set up. Please try again later.' },
         503,
       )
-    await ensureAuthSchema(c.env.DB)
     await ensureSchema(c.env.DB)
-    c.set('user', user)
     c.set('db', c.env.DB)
     await next()
   }
-  // Both patterns are needed: `/api/items/*` does not match `/api/items`.
-  app.use('/api/feed', guard)
-  app.use('/api/popular', guard)
+
   app.use('/api/items', guard)
   app.use('/api/items/*', guard)
 
-  app.get('/api/feed', async (c) => {
+  // Everything public, newest first. Private reads stay off the feed.
+  app.get('/api/feed', guard, async (c) => {
     const rows = await c
       .get('db')
       .prepare(
-        `SELECT ${COLUMNS} FROM items WHERE visibility = 'public' AND owner_sub <> ? ORDER BY created_at DESC LIMIT 60`,
+        `SELECT ${COLUMNS} FROM items WHERE visibility = 'public' ORDER BY created_at DESC LIMIT 60`,
       )
-      .bind(c.get('user').sub)
       .all<ItemRow>()
     return c.json({
-      items: rows.results.map((row) => mapItem(row, c.get('user').sub)),
+      items: rows.results.map((row) => mapItem(row)),
     })
   })
 
-  // All-time ranking. Private items never appear here, and only public opens
-  // are counted by reachable readers, so it cannot reveal a private title.
-  app.get('/api/popular', async (c) => {
-    const viewer = c.get('user').sub
+  // All-time ranking of public reads by how often they were opened.
+  app.get('/api/popular', guard, async (c) => {
     const rows = await c
       .get('db')
       .prepare(
         `SELECT ${COLUMNS} FROM items WHERE visibility = 'public' AND opens > 0 ORDER BY opens DESC, created_at DESC LIMIT 50`,
       )
       .all<ItemRow>()
-    return c.json({ items: rows.results.map((row) => mapItem(row, viewer)) })
+    return c.json({ items: rows.results.map((row) => mapItem(row)) })
   })
 
-  app.get('/api/items', async (c) => {
-    const viewer = c.get('user').sub
+  app.get('/api/items', guard, async (c) => {
     const rows = await c
       .get('db')
       .prepare(
-        `SELECT ${COLUMNS} FROM items WHERE owner_sub = ? ORDER BY created_at DESC LIMIT 200`,
+        `SELECT ${COLUMNS} FROM items ORDER BY created_at DESC LIMIT 200`,
       )
-      .bind(viewer)
       .all<ItemRow>()
-    return c.json({ items: rows.results.map((row) => mapItem(row, viewer)) })
+    return c.json({ items: rows.results.map((row) => mapItem(row)) })
   })
 
   app.post(
     '/api/items',
+    guard,
     bodyLimit({
       maxSize: MAX_UPLOAD + MAX_COVER + 512 * 1024,
       onError: (c) =>
@@ -238,7 +175,10 @@ export function createApp(authenticate: Authenticate = currentUser) {
       const type = TYPES[mime]
       if (!type)
         return c.json(
-          { error: 'Only PDFs, JPEG, PNG, WebP, GIF and AVIF images can go on the shelf.' },
+          {
+            error:
+              'Only PDFs, JPEG, PNG, WebP, GIF and AVIF images can go on the shelf.',
+          },
           415,
         )
       if (file.size > MAX_UPLOAD)
@@ -272,15 +212,14 @@ export function createApp(authenticate: Authenticate = currentUser) {
         coverBytes = await cover.arrayBuffer()
       }
 
-      const user = c.get('user')
       const id = crypto.randomUUID()
-      const key = `items/${user.sub}/${id}`
+      const key = `items/${VIEWER.sub}/${id}`
       const coverKey = coverMime ? `${key}-cover` : null
       const now = Date.now()
       const item: ItemRow = {
         id,
-        owner_sub: user.sub,
-        owner_name: (user.name || user.email || 'A reader').slice(0, 80),
+        owner_sub: VIEWER.sub,
+        owner_name: VIEWER.name,
         title,
         kind: type.kind,
         mime,
@@ -333,47 +272,40 @@ export function createApp(authenticate: Authenticate = currentUser) {
           .catch(() => undefined)
         throw error
       }
-      return c.json({ item: mapItem(item, user.sub) }, 201)
+      return c.json({ item: mapItem(item) }, 201)
     },
   )
 
-  app.patch('/api/items/:id', async (c) => {
+  app.patch('/api/items/:id', guard, async (c) => {
     const parsed = parseJson(await c.req.json().catch(() => null))
     if ('error' in parsed) return c.json({ error: parsed.error }, 400)
     const db = c.get('db')
-    const owner = c.get('user').sub
     const id = c.req.param('id')
     const current = await db
-      .prepare(`SELECT ${COLUMNS} FROM items WHERE id = ? AND owner_sub = ?`)
-      .bind(id, owner)
+      .prepare(`SELECT ${COLUMNS} FROM items WHERE id = ?`)
+      .bind(id)
       .first<ItemRow>()
     if (!current) return c.json({ error: 'Item not found.' }, 404)
 
     const visibility = parsed.fields.visibility ?? current.visibility
     const updated = await db
       .prepare(
-        `UPDATE items SET title = ?, visibility = ?, updated_at = ? WHERE id = ? AND owner_sub = ? RETURNING ${COLUMNS}`,
+        `UPDATE items SET title = ?, visibility = ?, updated_at = ? WHERE id = ? RETURNING ${COLUMNS}`,
       )
-      .bind(
-        parsed.fields.title ?? current.title,
-        visibility,
-        Date.now(),
-        id,
-        owner,
-      )
+      .bind(parsed.fields.title ?? current.title, visibility, Date.now(), id)
       .first<ItemRow>()
     return updated
-      ? c.json({ item: mapItem(updated, owner) })
+      ? c.json({ item: mapItem(updated) })
       : c.json({ error: 'Item not found.' }, 404)
   })
 
-  app.delete('/api/items/:id', async (c) => {
-    const db = c.get('db')
-    const removed = await db
+  app.delete('/api/items/:id', guard, async (c) => {
+    const removed = await c
+      .get('db')
       .prepare(
-        'DELETE FROM items WHERE id = ? AND owner_sub = ? RETURNING object_key, cover_key',
+        'DELETE FROM items WHERE id = ? RETURNING object_key, cover_key',
       )
-      .bind(c.req.param('id'), c.get('user').sub)
+      .bind(c.req.param('id'))
       .first<{ object_key: string; cover_key: string | null }>()
     if (!removed) return c.json({ error: 'Item not found.' }, 404)
     // The row is the source of truth; a missing object is not an error.
@@ -388,39 +320,30 @@ export function createApp(authenticate: Authenticate = currentUser) {
 
   // Counting an open is separate from fetching bytes, so the reader records it
   // once per visit while previews and thumbnails stay uncounted.
-  app.post('/api/items/:id/open', async (c) => {
-    const db = c.get('db')
-    const viewer = c.get('user').sub
+  app.post('/api/items/:id/open', guard, async (c) => {
     const id = c.req.param('id')
-    const row = await db
-      .prepare(`SELECT ${COLUMNS} FROM items WHERE id = ?`)
-      .bind(id)
-      .first<ItemRow>()
-    if (!row || (row.visibility !== 'public' && row.owner_sub !== viewer))
-      return c.json({ error: 'Item not found.' }, 404)
-    const opened = await db
+    const opened = await c
+      .get('db')
       .prepare('UPDATE items SET opens = opens + 1 WHERE id = ? RETURNING opens')
       .bind(id)
       .first<{ opens: number }>()
-    return c.json({ opens: opened?.opens ?? row.opens + 1 })
+    if (!opened) return c.json({ error: 'Item not found.' }, 404)
+    return c.json({ opens: opened.opens })
   })
 
-  app.get('/api/items/:id/file', async (c) => {
+  app.get('/api/items/:id/file', guard, async (c) => {
     const bucket = c.env.FILES
     if (!bucket)
       return c.json(
         { error: 'Uploads are still being set up. Please try again later.' },
         503,
       )
-    const viewer = c.get('user').sub
     const row = await c
       .get('db')
       .prepare(`SELECT ${COLUMNS} FROM items WHERE id = ?`)
       .bind(c.req.param('id'))
       .first<ItemRow>()
-    // Private items of other people are indistinguishable from missing ones.
-    if (!row || (row.visibility !== 'public' && row.owner_sub !== viewer))
-      return c.json({ error: 'Item not found.' }, 404)
+    if (!row) return c.json({ error: 'Item not found.' }, 404)
     const object = await bucket.get(row.object_key)
     if (!object) return c.json({ error: 'This file is unavailable.' }, 404)
 
@@ -434,29 +357,29 @@ export function createApp(authenticate: Authenticate = currentUser) {
         'Content-Disposition': `inline; filename="${fileName(row.title, TYPES[row.mime]?.ext ?? 'bin')}"`,
         'X-Content-Type-Options': 'nosniff',
         'Cache-Control':
-          row.visibility === 'public' ? 'private, max-age=300' : 'private, no-store',
+          row.visibility === 'public'
+            ? 'private, max-age=300'
+            : 'private, no-store',
         ETag: object.httpEtag,
       },
     })
   })
 
-  // Covers are read by every card and row, so they follow the same access
-  // rules as the document itself.
-  app.get('/api/items/:id/cover', async (c) => {
+  // Covers are read by every card and row, so they follow the same rules as
+  // the document itself.
+  app.get('/api/items/:id/cover', guard, async (c) => {
     const bucket = c.env.FILES
     if (!bucket)
       return c.json(
         { error: 'Uploads are still being set up. Please try again later.' },
         503,
       )
-    const viewer = c.get('user').sub
     const row = await c
       .get('db')
       .prepare(`SELECT ${COLUMNS} FROM items WHERE id = ?`)
       .bind(c.req.param('id'))
       .first<ItemRow>()
-    if (!row || (row.visibility !== 'public' && row.owner_sub !== viewer))
-      return c.json({ error: 'Item not found.' }, 404)
+    if (!row) return c.json({ error: 'Item not found.' }, 404)
     if (!row.cover_key) return c.json({ error: 'This read has no cover.' }, 404)
     const object = await bucket.get(row.cover_key)
     if (!object) return c.json({ error: 'This cover is unavailable.' }, 404)
@@ -468,7 +391,9 @@ export function createApp(authenticate: Authenticate = currentUser) {
         'Content-Length': String(bytes.byteLength),
         'X-Content-Type-Options': 'nosniff',
         'Cache-Control':
-          row.visibility === 'public' ? 'private, max-age=300' : 'private, no-store',
+          row.visibility === 'public'
+            ? 'private, max-age=300'
+            : 'private, no-store',
         ETag: object.httpEtag,
       },
     })

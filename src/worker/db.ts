@@ -73,13 +73,14 @@ export type ItemRow = {
   updated_at: number
 }
 
-export const mapItem = (row: ItemRow, viewer: string): Item => ({
+export const mapItem = (row: ItemRow): Item => ({
   id: row.id,
   title: row.title,
   kind: row.kind === 'pdf' ? 'pdf' : ('image' as ItemKind),
   visibility: row.visibility === 'private' ? 'private' : ('public' as Visibility),
   ownerName: row.owner_name,
-  isOwner: row.owner_sub === viewer,
+  // Without accounts there is one reader, so every read is theirs.
+  isOwner: true,
   size: row.size,
   hasCover: Boolean(row.cover_key),
   opens: row.opens,

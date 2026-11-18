@@ -17,11 +17,7 @@ export type Item = {
   updatedAt: number
 }
 
-export type Session = {
-  user: { sub: string; name?: string; email?: string } | null
-  mode: 'ready' | 'setup'
+export type Status = {
   database: boolean
   storage: boolean
-  /** True when Google sign-in is configured. */
-  google: boolean
 }

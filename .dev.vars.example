@@ -1,13 +1,2 @@
-# Copy to .dev.vars to enable Google sign-in.
-# Create a Web application OAuth client in Google Cloud Console and register:
-#   http://localhost:5174/api/auth/google/callback
-#   <APP_ORIGIN>/api/auth/google/callback
-
-# 32+ random characters. Required on any hosted origin.
-# SESSION_SECRET=change-me-to-a-long-random-string
-
-# GOOGLE_CLIENT_ID=xxxxxxxx.apps.googleusercontent.com
-# GOOGLE_CLIENT_SECRET=xxxxxxxxxxxxxxxx
-
-# Origin serving the app; the Google redirect is built from it.
-# APP_ORIGIN=http://localhost:5174
+# Copy to .dev.vars for local overrides. Readshelf needs no sign-in settings;
+# local D1 and R2 bindings come from wrangler.jsonc.

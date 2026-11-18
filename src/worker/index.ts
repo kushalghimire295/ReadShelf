@@ -1,5 +1,4 @@
-import { createApp } from './app'
-import type { Env } from './auth'
+import { createApp, type Env } from './app'
 
 const app = createApp()
 
