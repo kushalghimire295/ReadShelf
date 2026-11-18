@@ -1,10 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { Item, Status, Visibility } from '../shared/types'
+import type { Item, Status, User, Visibility } from '../shared/types'
+import {
+  accessToken,
+  createSupabase,
+  currentUser,
+  signInWithGoogle,
+  signOut,
+} from './supabase'
 import './style.css'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init)
+  const token = accessToken()
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      ...(init?.headers ?? {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  })
   const body = (await response.json().catch(() => {
     throw new Error('Could not reach Readshelf. Please try again.')
   })) as T & { error?: string }
@@ -155,8 +169,86 @@ function Thumb({ item, big = false }: { item: Item; big?: boolean }) {
   )
 }
 
+function SignIn({ status }: { status: Status }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function start() {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      await signInWithGoogle()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not reach Google.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <main className="gate">
+      <div className="gate-card">
+        <span className="wordmark">
+          <span className="mark" aria-hidden="true" />
+          Readshelf
+        </span>
+        <h1>Sign in to Readshelf.</h1>
+        <p className="lede">
+          Continue with Google. Your shelf is private to that account, and the
+          reads you make public show up on Home.
+        </p>
+
+        {status.supabase ? (
+          <button
+            type="button"
+            className="primary gate-button"
+            disabled={busy}
+            onClick={() => void start()}
+          >
+            {busy ? 'Opening Google…' : 'Continue with Google'}
+          </button>
+        ) : (
+          <div className="signin">
+            <p className="notice">
+              Google sign-in is not connected yet. Add your Supabase project and
+              reload this page.
+            </p>
+            <ol className="gate-steps">
+              <li>
+                In Supabase, enable the Google provider under Authentication →
+                Providers and paste your Google OAuth client id and secret.
+              </li>
+              <li>
+                Add <code>{window.location.origin}</code> as a redirect URL
+                under Authentication → URL Configuration.
+              </li>
+              <li>
+                Set <code>SUPABASE_URL</code> and <code>SUPABASE_ANON_KEY</code>{' '}
+                in <code>.dev.vars</code>, then restart the server.
+              </li>
+            </ol>
+          </div>
+        )}
+
+        {error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
+        )}
+
+        <ul className="gate-points">
+          <li>Private reads stay on your shelf only.</li>
+          <li>Public reads take a fair turn on the Home draw.</li>
+          <li>“Most opened” ranks public reads by how often they’re opened.</li>
+        </ul>
+      </div>
+    </main>
+  )
+}
+
 function App() {
   const [status, setStatus] = useState<Status | null>(null)
+  const [user, setUser] = useState<User | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [view, setView] = useState<View>('home')
   const [feed, setFeed] = useState<Item[]>([])
@@ -188,7 +280,9 @@ function App() {
     document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light',
   )
 
-  const enabled = Boolean(loaded && status?.database && status.storage)
+  const enabled = Boolean(
+    loaded && user && status?.database && status.storage,
+  )
 
   // My Adds is alphabetical; the toggle flips the direction.
   const shelfSorted = useMemo(
@@ -260,8 +354,14 @@ function App() {
         const current = await request<Status>('/api/status')
         if (!live) return
         setStatus(current)
-        if (current.database && current.storage) {
-          await Promise.all([loadFeed(), loadPopular(), loadShelf()])
+        if (current.supabase) {
+          createSupabase(current.supabaseUrl, current.supabaseAnonKey)
+          const signedIn = await currentUser()
+          if (!live) return
+          setUser(signedIn)
+          if (signedIn && current.database && current.storage) {
+            await Promise.all([loadFeed(), loadPopular(), loadShelf()])
+          }
         }
       } catch (e) {
         if (live)
@@ -474,6 +574,9 @@ function App() {
       </main>
     )
 
+  // Nothing behind the gate renders without a verified Supabase session.
+  if (!status.supabase || !user) return <SignIn status={status} />
+
   return (
     <main>
       <header className="topbar">
@@ -525,6 +628,17 @@ function App() {
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
           >
             {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+          </button>
+          {user && <span className="who">{user.name || user.email}</span>}
+          <button
+            type="button"
+            className="quiet small"
+            onClick={async () => {
+              await signOut()
+              window.location.replace('/')
+            }}
+          >
+            Sign out
           </button>
         </div>
       </header>

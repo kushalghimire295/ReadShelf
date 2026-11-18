@@ -260,6 +260,14 @@ main {
 .account form {
   margin: 0;
 }
+/* The signed-in account name, kept short so the bar never wraps on a phone. */
+.who {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
 
 /* ---------- shared text ---------- */
 .eyebrow {

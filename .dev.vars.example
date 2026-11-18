@@ -1,2 +1,9 @@
-# Copy to .dev.vars for local overrides. Readshelf needs no sign-in settings;
-# local D1 and R2 bindings come from wrangler.jsonc.
+# Copy to .dev.vars to enable Google sign-in.
+# Enable the Google provider in Supabase (Authentication -> Providers) and add
+# these redirect URLs (Authentication -> URL Configuration):
+#   http://localhost:5174
+#   <your deployed origin>
+
+# Public project values; never the service-role key.
+# SUPABASE_URL=https://<project-ref>.supabase.co
+# SUPABASE_ANON_KEY=<anon public key>

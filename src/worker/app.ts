@@ -2,8 +2,14 @@ import { Hono, type Handler } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import type { ItemKind } from '../shared/types'
 import { ensureSchema, mapItem, type ItemRow } from './db'
+import {
+  supabaseConfigured,
+  verifySupabaseUser,
+  type AuthUser,
+  type SupabaseEnv,
+} from './supabase'
 
-export type Env = {
+export type Env = SupabaseEnv & {
   ASSETS: Fetcher
   DB?: D1Database
   FILES?: R2Bucket
@@ -11,15 +17,9 @@ export type Env = {
 
 type AppContext = {
   Bindings: Env
-  Variables: { db: D1Database }
+  Variables: { user: AuthUser; db: D1Database }
 }
-
-/**
- * Readshelf has no accounts: everything on the shelf belongs to the reader
- * using it. The owner columns stay for the one identity so rows remain
- * self-describing.
- */
-const VIEWER = { sub: 'local-reader', name: 'Reader' }
+type Authenticate = (request: Request, env: Env) => Promise<AuthUser | null>
 
 const MAX_UPLOAD = 15 * 1024 * 1024
 const MAX_COVER = 5 * 1024 * 1024
@@ -87,7 +87,10 @@ function parseJson(body: unknown): { error: string } | { fields: JsonFields } {
   return { fields }
 }
 
-export function createApp(random: () => number = Math.random) {
+export function createApp(
+  authenticate: Authenticate = verifySupabaseUser,
+  random: () => number = Math.random,
+) {
   const app = new Hono<AppContext>()
   app.get('/api/health', (c) => c.json({ ok: true }))
   app.use('/api/*', async (c, next) => {
@@ -96,19 +99,36 @@ export function createApp(random: () => number = Math.random) {
   })
 
   app.get('/api/status', (c) =>
-    c.json({ database: Boolean(c.env.DB), storage: Boolean(c.env.FILES) }),
+    c.json({
+      database: Boolean(c.env.DB),
+      storage: Boolean(c.env.FILES),
+      supabase: supabaseConfigured(c.env),
+      // Public by design: the browser needs these to start sign-in.
+      supabaseUrl: c.env.SUPABASE_URL ?? '',
+      supabaseAnonKey: c.env.SUPABASE_ANON_KEY ?? '',
+    }),
+  )
+
+  // Null rather than 401: the page asks who is signed in before it has a token.
+  app.get('/api/me', async (c) =>
+    c.json({ user: await authenticate(c.req.raw, c.env) }),
   )
 
   const guard: Handler<AppContext> = async (c, next) => {
-    const origin = c.req.header('Origin')
-    if (origin && origin !== new URL(c.req.url).origin)
-      return c.json({ error: 'Cross-origin request refused.' }, 403)
+    const user = await authenticate(c.req.raw, c.env)
+    if (!user) return c.json({ error: 'Sign in required.' }, 401)
+    if (!['GET', 'HEAD'].includes(c.req.method)) {
+      const origin = c.req.header('Origin')
+      if (origin && origin !== new URL(c.req.url).origin)
+        return c.json({ error: 'Cross-origin request refused.' }, 403)
+    }
     if (!c.env.DB)
       return c.json(
         { error: 'This app is still being set up. Please try again later.' },
         503,
       )
     await ensureSchema(c.env.DB)
+    c.set('user', user)
     c.set('db', c.env.DB)
     await next()
   }
@@ -123,6 +143,7 @@ export function createApp(random: () => number = Math.random) {
   // never counted and never drawn.
   app.get('/api/feed', guard, async (c) => {
     const db = c.get('db')
+    const viewer = c.get('user').sub
     const rows = await db
       .prepare(
         `SELECT ${COLUMNS} FROM items WHERE visibility = 'public' LIMIT 500`,
@@ -152,7 +173,7 @@ export function createApp(random: () => number = Math.random) {
     }
 
     return c.json({
-      items: picked.map((row) => mapItem(row)),
+      items: picked.map((row) => mapItem(row, viewer)),
       chance,
       total,
     })
@@ -160,23 +181,26 @@ export function createApp(random: () => number = Math.random) {
 
   // All-time ranking of public reads by how often they were opened.
   app.get('/api/popular', guard, async (c) => {
+    const viewer = c.get('user').sub
     const rows = await c
       .get('db')
       .prepare(
         `SELECT ${COLUMNS} FROM items WHERE visibility = 'public' AND opens > 0 ORDER BY opens DESC, created_at DESC LIMIT 50`,
       )
       .all<ItemRow>()
-    return c.json({ items: rows.results.map((row) => mapItem(row)) })
+    return c.json({ items: rows.results.map((row) => mapItem(row, viewer)) })
   })
 
   app.get('/api/items', guard, async (c) => {
+    const viewer = c.get('user').sub
     const rows = await c
       .get('db')
       .prepare(
-        `SELECT ${COLUMNS} FROM items ORDER BY created_at DESC LIMIT 200`,
+        `SELECT ${COLUMNS} FROM items WHERE owner_sub = ? ORDER BY created_at DESC LIMIT 200`,
       )
+      .bind(viewer)
       .all<ItemRow>()
-    return c.json({ items: rows.results.map((row) => mapItem(row)) })
+    return c.json({ items: rows.results.map((row) => mapItem(row, viewer)) })
   })
 
   app.post(
@@ -241,14 +265,15 @@ export function createApp(random: () => number = Math.random) {
         coverBytes = await cover.arrayBuffer()
       }
 
+      const user = c.get('user')
       const id = crypto.randomUUID()
-      const key = `items/${VIEWER.sub}/${id}`
+      const key = `items/${user.sub}/${id}`
       const coverKey = coverMime ? `${key}-cover` : null
       const now = Date.now()
       const item: ItemRow = {
         id,
-        owner_sub: VIEWER.sub,
-        owner_name: VIEWER.name,
+        owner_sub: user.sub,
+        owner_name: (user.name || user.email || 'A reader').slice(0, 80),
         title,
         kind: type.kind,
         mime,
@@ -302,7 +327,7 @@ export function createApp(random: () => number = Math.random) {
           .catch(() => undefined)
         throw error
       }
-      return c.json({ item: mapItem(item) }, 201)
+      return c.json({ item: mapItem(item, user.sub) }, 201)
     },
   )
 
@@ -310,22 +335,29 @@ export function createApp(random: () => number = Math.random) {
     const parsed = parseJson(await c.req.json().catch(() => null))
     if ('error' in parsed) return c.json({ error: parsed.error }, 400)
     const db = c.get('db')
+    const owner = c.get('user').sub
     const id = c.req.param('id')
     const current = await db
-      .prepare(`SELECT ${COLUMNS} FROM items WHERE id = ?`)
-      .bind(id)
+      .prepare(`SELECT ${COLUMNS} FROM items WHERE id = ? AND owner_sub = ?`)
+      .bind(id, owner)
       .first<ItemRow>()
     if (!current) return c.json({ error: 'Item not found.' }, 404)
 
     const visibility = parsed.fields.visibility ?? current.visibility
     const updated = await db
       .prepare(
-        `UPDATE items SET title = ?, visibility = ?, updated_at = ? WHERE id = ? RETURNING ${COLUMNS}`,
+        `UPDATE items SET title = ?, visibility = ?, updated_at = ? WHERE id = ? AND owner_sub = ? RETURNING ${COLUMNS}`,
       )
-      .bind(parsed.fields.title ?? current.title, visibility, Date.now(), id)
+      .bind(
+        parsed.fields.title ?? current.title,
+        visibility,
+        Date.now(),
+        id,
+        owner,
+      )
       .first<ItemRow>()
     return updated
-      ? c.json({ item: mapItem(updated) })
+      ? c.json({ item: mapItem(updated, owner) })
       : c.json({ error: 'Item not found.' }, 404)
   })
 
@@ -333,9 +365,9 @@ export function createApp(random: () => number = Math.random) {
     const removed = await c
       .get('db')
       .prepare(
-        'DELETE FROM items WHERE id = ? RETURNING object_key, cover_key',
+        'DELETE FROM items WHERE id = ? AND owner_sub = ? RETURNING object_key, cover_key',
       )
-      .bind(c.req.param('id'))
+      .bind(c.req.param('id'), c.get('user').sub)
       .first<{ object_key: string; cover_key: string | null }>()
     if (!removed) return c.json({ error: 'Item not found.' }, 404)
     // The row is the source of truth; a missing object is not an error.
@@ -351,14 +383,20 @@ export function createApp(random: () => number = Math.random) {
   // Counting an open is separate from fetching bytes, so the reader records it
   // once per visit while previews and thumbnails stay uncounted.
   app.post('/api/items/:id/open', guard, async (c) => {
+    const db = c.get('db')
+    const viewer = c.get('user').sub
     const id = c.req.param('id')
-    const opened = await c
-      .get('db')
+    const row = await db
+      .prepare(`SELECT ${COLUMNS} FROM items WHERE id = ?`)
+      .bind(id)
+      .first<ItemRow>()
+    if (!row || (row.visibility !== 'public' && row.owner_sub !== viewer))
+      return c.json({ error: 'Item not found.' }, 404)
+    const opened = await db
       .prepare('UPDATE items SET opens = opens + 1 WHERE id = ? RETURNING opens')
       .bind(id)
       .first<{ opens: number }>()
-    if (!opened) return c.json({ error: 'Item not found.' }, 404)
-    return c.json({ opens: opened.opens })
+    return c.json({ opens: opened?.opens ?? row.opens + 1 })
   })
 
   app.get('/api/items/:id/file', guard, async (c) => {
@@ -368,12 +406,15 @@ export function createApp(random: () => number = Math.random) {
         { error: 'Uploads are still being set up. Please try again later.' },
         503,
       )
+    const viewer = c.get('user').sub
     const row = await c
       .get('db')
       .prepare(`SELECT ${COLUMNS} FROM items WHERE id = ?`)
       .bind(c.req.param('id'))
       .first<ItemRow>()
-    if (!row) return c.json({ error: 'Item not found.' }, 404)
+    // Private reads of other people are indistinguishable from missing ones.
+    if (!row || (row.visibility !== 'public' && row.owner_sub !== viewer))
+      return c.json({ error: 'Item not found.' }, 404)
     const object = await bucket.get(row.object_key)
     if (!object) return c.json({ error: 'This file is unavailable.' }, 404)
 
@@ -395,8 +436,8 @@ export function createApp(random: () => number = Math.random) {
     })
   })
 
-  // Covers are read by every card and row, so they follow the same rules as
-  // the document itself.
+  // Covers are read by every card and row, so they follow the same access
+  // rules as the document itself.
   app.get('/api/items/:id/cover', guard, async (c) => {
     const bucket = c.env.FILES
     if (!bucket)
@@ -404,12 +445,14 @@ export function createApp(random: () => number = Math.random) {
         { error: 'Uploads are still being set up. Please try again later.' },
         503,
       )
+    const viewer = c.get('user').sub
     const row = await c
       .get('db')
       .prepare(`SELECT ${COLUMNS} FROM items WHERE id = ?`)
       .bind(c.req.param('id'))
       .first<ItemRow>()
-    if (!row) return c.json({ error: 'Item not found.' }, 404)
+    if (!row || (row.visibility !== 'public' && row.owner_sub !== viewer))
+      return c.json({ error: 'Item not found.' }, 404)
     if (!row.cover_key) return c.json({ error: 'This read has no cover.' }, 404)
     const object = await bucket.get(row.cover_key)
     if (!object) return c.json({ error: 'This cover is unavailable.' }, 404)

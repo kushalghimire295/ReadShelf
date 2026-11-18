@@ -17,7 +17,18 @@ export type Item = {
   updatedAt: number
 }
 
+export type User = {
+  sub: string
+  email?: string
+  name?: string
+}
+
 export type Status = {
   database: boolean
   storage: boolean
+  /** True when Supabase URL and anon key are configured. */
+  supabase: boolean
+  /** Public values the browser needs to start Google sign-in. */
+  supabaseUrl: string
+  supabaseAnonKey: string
 }
