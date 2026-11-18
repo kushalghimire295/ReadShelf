@@ -364,53 +364,50 @@ test('covers follow the same ownership rules as the document', async () => {
   ).toBe(200)
 })
 
-test('the Home percentage holds over a long run and every read gets its turn', async () => {
+test('Home lists every public read, never the private ones', async () => {
   await reset()
   await upload({ title: 'One', user: 'alice' })
   await upload({ title: 'Two', user: 'bob' })
-  const draw = createApp(identity, () => 0.5)
-
-  const first = (await (
-    await draw.request(
-      `${ORIGIN}/api/feed`,
-      { headers: { Authorization: 'Bearer alice' } },
-      env,
-    )
-  ).json()) as { items: { title: string }[]; chance: number; total: number }
-  expect(first).toMatchObject({ total: 2, chance: 0.5 })
-  expect(first.items).toHaveLength(1)
-
-  await reset()
-  const titles = ['A', 'B', 'C', 'D']
-  for (const title of titles) await upload({ title })
-  const counts = new Map<string, number>()
-  for (let visit = 0; visit < 40; visit += 1) {
-    const body = (await (
-      await draw.request(
+  const app = createApp(identity, () => 0.5)
+  const feed = async () =>
+    (await (
+      await app.request(
         `${ORIGIN}/api/feed`,
-        { headers: { Authorization: 'Bearer bob' } },
+        { headers: { Authorization: 'Bearer alice' } },
         env,
       )
-    ).json()) as { items: { title: string }[]; chance: number }
-    expect(body.chance).toBe(0.25)
-    expect(body.items).toHaveLength(1)
-    const title = body.items[0]!.title
-    counts.set(title, (counts.get(title) ?? 0) + 1)
-  }
-  // Forty visits at 25% each is ten appearances per read: the printed
-  // percentage is a long-run promise, not a per-visit coin toss.
-  for (const title of titles) expect(counts.get(title)).toBe(10)
+    ).json()) as { items: { title: string }[]; chance: number; total: number }
 
-  // Private reads change neither the total nor the draw.
+  // Two shared reads: both show up, not just the one a draw would pick.
+  const first = await feed()
+  expect(first).toMatchObject({ total: 2, chance: 1 })
+  expect(first.items.map((entry) => entry.title).sort()).toEqual([
+    'One',
+    'Two',
+  ])
+
+  // Private reads stay off Home on every visit, whatever the draw does.
   await upload({ title: 'Hidden', visibility: 'private' })
-  const after = (await (
-    await draw.request(
-      `${ORIGIN}/api/feed`,
-      { headers: { Authorization: 'Bearer bob' } },
-      env,
-    )
-  ).json()) as { total: number; chance: number }
-  expect(after).toMatchObject({ total: 4, chance: 0.25 })
+  for (let visit = 0; visit < 3; visit += 1) {
+    const body = await feed()
+    expect(body.total).toBe(2)
+    expect(body.items.map((entry) => entry.title).sort()).toEqual([
+      'One',
+      'Two',
+    ])
+  }
+
+  // A bigger shelf comes back whole, so readers can scroll through all of it.
+  await upload({ title: 'Three' })
+  await upload({ title: 'Four' })
+  const many = await feed()
+  expect(many).toMatchObject({ total: 4, chance: 1 })
+  expect(many.items.map((entry) => entry.title).sort()).toEqual([
+    'Four',
+    'One',
+    'Three',
+    'Two',
+  ])
 })
 
 test('documents from before sign-in are adopted by the first account', async () => {

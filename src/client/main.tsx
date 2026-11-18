@@ -232,8 +232,6 @@ function App() {
   const [authSettled, setAuthSettled] = useState(false)
   const [view, setView] = useState<View>('home')
   const [feed, setFeed] = useState<Item[]>([])
-  // Share of public reads that Home draws from, as a 0–1 probability.
-  const [feedChance, setFeedChance] = useState(0)
   const [popular, setPopular] = useState<Item[]>([])
   const [shelf, setShelf] = useState<Item[]>([])
   const [feedState, setFeedState] = useState<'idle' | 'loading' | 'done'>('idle')
@@ -297,11 +295,8 @@ function App() {
   const loadFeed = useCallback(async () => {
     setFeedState('loading')
     try {
-      const result = await request<{ items: Item[]; chance: number }>(
-        '/api/feed',
-      )
+      const result = await request<{ items: Item[] }>('/api/feed')
       setFeed(result.items)
-      setFeedChance(result.chance)
       setFeedState('done')
     } catch (e) {
       setFeedState('done')
@@ -654,9 +649,9 @@ function App() {
 
           {feed.length > 0 && (
             <p className="feed-note">
-              {feedChance >= 1
+              {feed.length === 1
                 ? 'Every public read shows up here.'
-                : `Each public read has a ${Math.round(feedChance * 100)}% chance of appearing here.`}
+                : `All ${feed.length} public reads are here — scroll for more.`}
             </p>
           )}
 

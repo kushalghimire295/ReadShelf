@@ -5,8 +5,9 @@ signed-in reader has their own shelf; public reads are shared on the Home feed.
 
 - **Private** — only its owner can list, open or download it. Anyone else gets
   the same 404 as for a missing read.
-- **Public** — enters the Home draw, which shows each read a fair share of the
-  time (two public reads: 50% each, and over many visits each appears half).
+- **Public** — appears on Home every time: all public reads are listed, and the
+  order rotates (least-shown first) so nothing stays buried. Long shelves just
+  scroll.
 - **Most opened** — an all-time ranking of public reads by how often they were
   opened; private reads are neither counted nor listed there.
 - **Covers** — a separate cover image can be uploaded with a document and is
@@ -73,7 +74,7 @@ Every shelf route needs `Authorization: Bearer <Firebase ID token>` and answers
 | --- | --- |
 | `GET /api/status` | bindings and the public Firebase web settings |
 | `GET /api/me` | the signed-in reader, or `null` |
-| `GET /api/feed` | the Home draw of public reads, with its percentage |
+| `GET /api/feed` | every public read, in rotating order |
 | `GET /api/items` | your own shelf |
 | `POST /api/items` | multipart upload: `file`, optional `cover`, `title`, `visibility` |
 | `PATCH /api/items/:id` | rename or change visibility (owner only) |
@@ -104,6 +105,6 @@ signs in, so an existing shelf is not stranded.
 `bun test` runs against real local D1 and R2 through Miniflare: upload bytes
 round-trip, private reads stay owner-only, public reads reach other readers,
 only an owner can rename or delete, opens are ranked for public reads only,
-covers are access-checked, the Home percentage holds over many visits, and a
-Firebase ID token is accepted only when its signature, project, issuer and
-expiry all check out.
+covers are access-checked, Home lists every public read and never a private
+one, and a Firebase ID token is accepted only when its signature, project,
+issuer and expiry all check out.

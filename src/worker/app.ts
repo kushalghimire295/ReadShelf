@@ -168,11 +168,10 @@ export function createApp(
   app.use('/api/items', guard)
   app.use('/api/items/*', guard)
 
-  // The Home feed is a draw, not a list. Each public read's chance is 1/total,
-  // and `shown` records how often it has already been drawn, so the least-shown
-  // reads go first. Over a long run every read appears its exact share (two
-  // reads: half the visits each) instead of relying on luck. Private reads are
-  // never counted and never drawn.
+  // Home lists every public read — nothing is held back by a draw, so two
+  // shared reads are both there instead of one. The order still rotates:
+  // `shown` counts how often a read has been placed, and the least-shown reads
+  // come first, with a shuffle deciding ties. Private reads never appear.
   app.get('/api/feed', guard, async (c) => {
     const db = c.get('db')
     const viewer = c.get('user').sub
@@ -182,11 +181,6 @@ export function createApp(
       )
       .all<ItemRow>()
     const pool = [...rows.results]
-    const total = pool.length
-    const chance = total ? 1 / total : 0
-    // How many reads this visit shows: the chance applied to the shelf, so the
-    // long-run average matches the percentage shown on screen.
-    const slots = total ? Math.max(1, Math.round(total * chance)) : 0
 
     // Shuffle first, then a stable sort by fewest appearances: ties rotate.
     for (let i = pool.length - 1; i > 0; i -= 1) {
@@ -194,20 +188,18 @@ export function createApp(
       ;[pool[i], pool[j]] = [pool[j]!, pool[i]!]
     }
     pool.sort((a, b) => a.shown - b.shown)
-    const picked = pool.slice(0, slots)
 
-    if (picked.length) {
-      const placeholders = picked.map(() => '?').join(', ')
+    if (pool.length) {
       await db
-        .prepare(`UPDATE items SET shown = shown + 1 WHERE id IN (${placeholders})`)
-        .bind(...picked.map((row) => row.id))
+        .prepare(`UPDATE items SET shown = shown + 1 WHERE visibility = 'public'`)
         .run()
     }
 
     return c.json({
-      items: picked.map((row) => mapItem(row, viewer)),
-      chance,
-      total,
+      items: pool.map((row) => mapItem(row, viewer)),
+      // Kept for the interface: every public read is on Home, always.
+      chance: 1,
+      total: pool.length,
     })
   })
 
