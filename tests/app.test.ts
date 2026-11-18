@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
+import { generateKeyPairSync, sign } from 'node:crypto'
 import { Miniflare } from 'miniflare'
 import { createApp, type Env } from '../src/worker/app'
-import { resetVerificationCache, verifySupabaseUser } from '../src/worker/supabase'
+import { resetVerificationCache, verifyFirebaseUser } from '../src/worker/firebase'
 
 const runtime = new Miniflare({
   workers: [
@@ -45,8 +46,8 @@ afterAll(() => runtime.dispose())
 const ORIGIN = 'https://app.example.test'
 
 /**
- * The real verifier calls Supabase. Tests stand in for it with a header so the
- * shelf rules can be exercised without a network round trip.
+ * The real verifier checks a Firebase ID token. Tests stand in for it with a
+ * header so the shelf rules can be exercised without a network round trip.
  */
 const identity = async (request: Request) => {
   const token = (request.headers.get('Authorization') ?? '').replace(
@@ -141,7 +142,12 @@ test('the status is public but the shelf is not', async () => {
     string,
     unknown
   >
-  expect(status).toMatchObject({ database: true, storage: true, supabase: false })
+  expect(status).toMatchObject({
+    database: true,
+    storage: true,
+    firebase: false,
+    firebaseConfig: null,
+  })
 
   // Without a token there is no user and no data.
   expect(((await (await call('/api/me')).json()) as { user: unknown }).user).toBeNull()
@@ -404,16 +410,75 @@ test('the Home percentage holds over a long run and every read gets its turn', a
   expect(after).toMatchObject({ total: 4, chance: 0.25 })
 })
 
-test('Supabase access tokens are verified against the project', async () => {
+test('documents from before sign-in are adopted by the first account', async () => {
+  await reset()
+  await upload({ title: 'Old read', user: 'alice' })
+  // A row left behind by the no-account era, with no adoption recorded yet.
+  await env.DB!.prepare(
+    `UPDATE items SET owner_sub = 'local-reader'`,
+  ).run()
+  await env.DB!.prepare('DELETE FROM app_meta').run()
+
+  // The first account to sign in inherits the pre-account shelf.
+  expect((await list('/api/items', 'bob')).map((entry) => entry.title)).toEqual([
+    'Old read',
+  ])
+  expect(await list('/api/items', 'alice')).toHaveLength(0)
+
+  // It happens once: the next account starts empty.
+  await env.DB!.prepare(
+    `UPDATE items SET owner_sub = 'local-reader'`,
+  ).run()
+  expect(await list('/api/items', 'alice')).toHaveLength(0)
+})
+
+test('Firebase ID tokens are verified against the project', async () => {
   resetVerificationCache()
-  const supabaseEnv: Env = {
-    ...env,
-    SUPABASE_URL: 'https://project.supabase.co',
-    SUPABASE_ANON_KEY: 'anon-key',
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+  })
+  const jwk = publicKey.export({ format: 'jwk' }) as {
+    kty: string
+    n: string
+    e: string
   }
+  const project = 'readshelf-test'
+  const firebaseEnv: Env = {
+    ...env,
+    FIREBASE_API_KEY: 'web-api-key',
+    FIREBASE_PROJECT_ID: project,
+    FIREBASE_APP_ID: '1:123:web:abc',
+  }
+
+  const encode = (value: unknown) =>
+    Buffer.from(JSON.stringify(value)).toString('base64url')
+  const makeToken = (
+    claims: Record<string, unknown> = {},
+    key = privateKey,
+  ) => {
+    const header = encode({ alg: 'RS256', kid: 'test-key', typ: 'JWT' })
+    const now = Math.floor(Date.now() / 1000)
+    const payload = encode({
+      iss: `https://securetoken.google.com/${project}`,
+      aud: project,
+      sub: 'firebase-uid',
+      iat: now,
+      exp: now + 3600,
+      email: 'reader@gmail.com',
+      email_verified: true,
+      name: 'Real Reader',
+      ...claims,
+    })
+    const signature = sign(
+      'RSA-SHA256',
+      Buffer.from(`${header}.${payload}`),
+      key,
+    ).toString('base64url')
+    return `${header}.${payload}.${signature}`
+  }
+
   const realFetch = globalThis.fetch.bind(globalThis)
-  const seen: { url: string; apikey: string | null; authorization: string | null }[] =
-    []
+  const seen: string[] = []
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url =
       typeof input === 'string'
@@ -421,76 +486,95 @@ test('Supabase access tokens are verified against the project', async () => {
         : input instanceof URL
           ? input.toString()
           : input.url
-    if (url === 'https://project.supabase.co/auth/v1/user') {
-      const headers = new Headers(init?.headers)
-      seen.push({
-        url,
-        apikey: headers.get('apikey'),
-        authorization: headers.get('Authorization'),
-      })
-      if (headers.get('Authorization') === 'Bearer good-token')
-        return Response.json({
-          id: 'google-user-id',
-          email: 'reader@gmail.com',
-          user_metadata: { full_name: 'Real Reader' },
-        })
-      return new Response('{"message":"invalid token"}', { status: 401 })
-    }
+    seen.push(url)
+    // Google's published keys, as the Worker would fetch them.
+    if (url.includes('securetoken@system.gserviceaccount.com'))
+      return Response.json(
+        {
+          keys: [
+            {
+              kid: 'test-key',
+              kty: 'RSA',
+              alg: 'RS256',
+              use: 'sig',
+              n: jwk.n,
+              e: jwk.e,
+            },
+          ],
+        },
+        { headers: { 'Cache-Control': 'public, max-age=3600' } },
+      )
     return realFetch(input as RequestInfo, init)
   }) as typeof fetch
 
-  try {
-    const user = await verifySupabaseUser(
+  const requestWith = (token: string) =>
+    verifyFirebaseUser(
       new Request('https://app.example.test/api/me', {
-        headers: { Authorization: 'Bearer good-token' },
+        headers: { Authorization: `Bearer ${token}` },
       }),
-      supabaseEnv,
+      firebaseEnv,
     )
-    expect(user).toEqual({
-      sub: 'google-user-id',
+
+  try {
+    expect(await requestWith(makeToken())).toEqual({
+      sub: 'firebase-uid',
       email: 'reader@gmail.com',
       name: 'Real Reader',
     })
-    // The anon key identifies the project; the token identifies the reader.
-    expect(seen[0]).toMatchObject({
-      apikey: 'anon-key',
-      authorization: 'Bearer good-token',
-    })
-
+    // Signed by a key Google never published.
+    const impostor = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+    }).privateKey
+    expect(await requestWith(makeToken({}, impostor))).toBeNull()
+    // Right signature, wrong project or issuer.
+    expect(await requestWith(makeToken({ aud: 'someone-else' }))).toBeNull()
     expect(
-      await verifySupabaseUser(
+      await requestWith(
+        makeToken({ iss: 'https://securetoken.google.com/other' }),
+      ),
+    ).toBeNull()
+    // Expired tokens are refused.
+    expect(
+      await requestWith(makeToken({ exp: Math.floor(Date.now() / 1000) - 5 })),
+    ).toBeNull()
+    // An unverified address is not an identity.
+    expect(await requestWith(makeToken({ email_verified: false }))).toBeNull()
+    expect(await requestWith('not-a-token')).toBeNull()
+    expect(
+      await verifyFirebaseUser(
+        new Request('https://app.example.test/api/me'),
+        firebaseEnv,
+      ),
+    ).toBeNull()
+    // With no Firebase project configured nobody can be authenticated.
+    expect(
+      await verifyFirebaseUser(
         new Request('https://app.example.test/api/me', {
-          headers: { Authorization: 'Bearer bad-token' },
+          headers: { Authorization: `Bearer ${makeToken()}` },
         }),
-        supabaseEnv,
+        { ...firebaseEnv, FIREBASE_PROJECT_ID: undefined },
       ),
     ).toBeNull()
 
-    // With no project configured nobody can be authenticated.
-    expect(
-      await verifySupabaseUser(
-        new Request('https://app.example.test/api/me', {
-          headers: { Authorization: 'Bearer good-token' },
-        }),
-        { ...supabaseEnv, SUPABASE_URL: undefined },
-      ),
-    ).toBeNull()
-
-    // The real app refuses the shelf for an unverifiable token.
+    // The real app refuses the shelf for a token it cannot verify.
     const realApp = createApp()
     const denied = await realApp.request(
       `${ORIGIN}/api/items`,
-      { headers: { Authorization: 'Bearer bad-token' } },
-      supabaseEnv,
+      { headers: { Authorization: 'Bearer not-a-token' } },
+      firebaseEnv,
     )
     expect(denied.status).toBe(401)
     const allowed = await realApp.request(
       `${ORIGIN}/api/me`,
-      { headers: { Authorization: 'Bearer good-token' } },
-      supabaseEnv,
+      { headers: { Authorization: `Bearer ${makeToken()}` } },
+      firebaseEnv,
     )
-    expect(((await allowed.json()) as { user: { email: string } }).user.email).toBe(
-      'reader@gmail.com',
+    expect(
+      ((await allowed.json()) as { user: { email: string } }).user.email,
+    ).toBe('reader@gmail.com')
+    // Verified against the project's signing keys, not a third-party API.
+    expect(seen.some((url) => url.includes('securetoken@system.gserviceaccount.com'))).toBe(
+      true,
     )
   } finally {
     globalThis.fetch = realFetch

@@ -23,12 +23,18 @@ export type User = {
   name?: string
 }
 
+export type FirebaseConfig = {
+  apiKey: string
+  authDomain: string
+  projectId: string
+  appId: string
+}
+
 export type Status = {
   database: boolean
   storage: boolean
-  /** True when Supabase URL and anon key are configured. */
-  supabase: boolean
+  /** True when the Firebase web app config is set. */
+  firebase: boolean
   /** Public values the browser needs to start Google sign-in. */
-  supabaseUrl: string
-  supabaseAnonKey: string
+  firebaseConfig: FirebaseConfig | null
 }

@@ -3,13 +3,14 @@ import { bodyLimit } from 'hono/body-limit'
 import type { ItemKind } from '../shared/types'
 import { ensureSchema, mapItem, type ItemRow } from './db'
 import {
-  supabaseConfigured,
-  verifySupabaseUser,
+  firebaseConfig,
+  firebaseConfigured,
+  verifyFirebaseUser,
   type AuthUser,
-  type SupabaseEnv,
-} from './supabase'
+  type FirebaseEnv,
+} from './firebase'
 
-export type Env = SupabaseEnv & {
+export type Env = FirebaseEnv & {
   ASSETS: Fetcher
   DB?: D1Database
   FILES?: R2Bucket
@@ -20,6 +21,9 @@ type AppContext = {
   Variables: { user: AuthUser; db: D1Database }
 }
 type Authenticate = (request: Request, env: Env) => Promise<AuthUser | null>
+
+/** Owners used before accounts existed; the first sign-in adopts their rows. */
+const LEGACY_OWNERS = ['local-reader', 'local-preview']
 
 const MAX_UPLOAD = 15 * 1024 * 1024
 const MAX_COVER = 5 * 1024 * 1024
@@ -87,8 +91,28 @@ function parseJson(body: unknown): { error: string } | { fields: JsonFields } {
   return { fields }
 }
 
+/** Documents uploaded before sign-in existed belong to nobody; adopt them once. */
+async function claimLegacyItems(db: D1Database, uid: string): Promise<void> {
+  const claimed = await db
+    .prepare(`SELECT value FROM app_meta WHERE key = 'legacy_claimed'`)
+    .first<{ value: string }>()
+  if (claimed) return
+  await db
+    .prepare(
+      `UPDATE items SET owner_sub = ? WHERE owner_sub IN (?, ?)`,
+    )
+    .bind(uid, ...LEGACY_OWNERS)
+    .run()
+  await db
+    .prepare(
+      `INSERT OR REPLACE INTO app_meta (key, value) VALUES ('legacy_claimed', ?)`,
+    )
+    .bind(uid)
+    .run()
+}
+
 export function createApp(
-  authenticate: Authenticate = verifySupabaseUser,
+  authenticate: Authenticate = verifyFirebaseUser,
   random: () => number = Math.random,
 ) {
   const app = new Hono<AppContext>()
@@ -102,10 +126,9 @@ export function createApp(
     c.json({
       database: Boolean(c.env.DB),
       storage: Boolean(c.env.FILES),
-      supabase: supabaseConfigured(c.env),
-      // Public by design: the browser needs these to start sign-in.
-      supabaseUrl: c.env.SUPABASE_URL ?? '',
-      supabaseAnonKey: c.env.SUPABASE_ANON_KEY ?? '',
+      firebase: firebaseConfigured(c.env),
+      // Public by design: the browser needs these to start Google sign-in.
+      firebaseConfig: firebaseConfig(c.env),
     }),
   )
 
@@ -128,6 +151,7 @@ export function createApp(
         503,
       )
     await ensureSchema(c.env.DB)
+    await claimLegacyItems(c.env.DB, user.sub)
     c.set('user', user)
     c.set('db', c.env.DB)
     await next()

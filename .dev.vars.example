@@ -1,9 +1,11 @@
-# Copy to .dev.vars to enable Google sign-in.
-# Enable the Google provider in Supabase (Authentication -> Providers) and add
-# these redirect URLs (Authentication -> URL Configuration):
-#   http://localhost:5174
-#   <your deployed origin>
+# Copy to .dev.vars to enable Google sign-in through Firebase.
+# Firebase console -> Project settings -> Your apps -> Web app -> SDK setup.
+# Authentication -> Sign-in method: enable Google.
+# Authentication -> Settings -> Authorized domains: add http://localhost and
+# your deployed origin.
 
-# Public project values; never the service-role key.
-# SUPABASE_URL=https://<project-ref>.supabase.co
-# SUPABASE_ANON_KEY=<anon public key>
+# Public web app values; the browser uses them to start sign-in.
+# FIREBASE_API_KEY=AIzaSy...
+# FIREBASE_PROJECT_ID=readshelf-1234
+# FIREBASE_APP_ID=1:1234567890:web:abcdef123456
+# FIREBASE_AUTH_DOMAIN=readshelf-1234.firebaseapp.com

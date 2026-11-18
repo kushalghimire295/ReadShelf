@@ -3,11 +3,11 @@ import { createRoot } from 'react-dom/client'
 import type { Item, Status, User, Visibility } from '../shared/types'
 import {
   accessToken,
-  createSupabase,
   currentUser,
+  initFirebase,
   signInWithGoogle,
   signOut,
-} from './supabase'
+} from './firebase'
 import './style.css'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -198,7 +198,7 @@ function SignIn({ status }: { status: Status }) {
           reads you make public show up on Home.
         </p>
 
-        {status.supabase ? (
+        {status.firebase ? (
           <button
             type="button"
             className="primary gate-button"
@@ -210,21 +210,23 @@ function SignIn({ status }: { status: Status }) {
         ) : (
           <div className="signin">
             <p className="notice">
-              Google sign-in is not connected yet. Add your Supabase project and
+              Google sign-in is not connected yet. Add your Firebase web app and
               reload this page.
             </p>
             <ol className="gate-steps">
               <li>
-                In Supabase, enable the Google provider under Authentication →
-                Providers and paste your Google OAuth client id and secret.
+                In the Firebase console create a project, then add a Web app and
+                enable Google under Authentication → Sign-in method.
               </li>
               <li>
-                Add <code>{window.location.origin}</code> as a redirect URL
-                under Authentication → URL Configuration.
+                Add <code>{window.location.origin}</code> under Authentication →
+                Settings → Authorized domains (localhost is there already).
               </li>
               <li>
-                Set <code>SUPABASE_URL</code> and <code>SUPABASE_ANON_KEY</code>{' '}
-                in <code>.dev.vars</code>, then restart the server.
+                Set <code>FIREBASE_API_KEY</code>, <code>FIREBASE_PROJECT_ID</code>{' '}
+                and <code>FIREBASE_APP_ID</code> (plus{' '}
+                <code>FIREBASE_AUTH_DOMAIN</code> if you use a custom one) in{' '}
+                <code>.dev.vars</code>, then restart the server.
               </li>
             </ol>
           </div>
@@ -354,8 +356,8 @@ function App() {
         const current = await request<Status>('/api/status')
         if (!live) return
         setStatus(current)
-        if (current.supabase) {
-          createSupabase(current.supabaseUrl, current.supabaseAnonKey)
+        if (current.firebase && current.firebaseConfig) {
+          initFirebase(current.firebaseConfig)
           const signedIn = await currentUser()
           if (!live) return
           setUser(signedIn)
@@ -574,8 +576,8 @@ function App() {
       </main>
     )
 
-  // Nothing behind the gate renders without a verified Supabase session.
-  if (!status.supabase || !user) return <SignIn status={status} />
+  // Nothing behind the gate renders without a verified Firebase session.
+  if (!status.firebase || !user) return <SignIn status={status} />
 
   return (
     <main>
