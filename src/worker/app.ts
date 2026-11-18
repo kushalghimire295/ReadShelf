@@ -25,7 +25,7 @@ const MAX_UPLOAD = 15 * 1024 * 1024
 const MAX_COVER = 5 * 1024 * 1024
 const MAX_TITLE = 120
 const COLUMNS =
-  'id, owner_sub, owner_name, title, kind, mime, size, object_key, cover_key, cover_mime, visibility, reach, opens, created_at, updated_at'
+  'id, owner_sub, owner_name, title, kind, mime, size, object_key, cover_key, cover_mime, visibility, reach, opens, shown, created_at, updated_at'
 
 const TYPES: Record<string, { kind: ItemKind; ext: string }> = {
   'application/pdf': { kind: 'pdf', ext: 'pdf' },
@@ -116,28 +116,43 @@ export function createApp(random: () => number = Math.random) {
   app.use('/api/items', guard)
   app.use('/api/items/*', guard)
 
-  // The Home feed is a draw, not a list: each public read has 1/total chance of
-  // appearing, so a crowded shelf shows a varied handful instead of everything.
-  // Private reads never enter the draw.
+  // The Home feed is a draw, not a list. Each public read's chance is 1/total,
+  // and `shown` records how often it has already been drawn, so the least-shown
+  // reads go first. Over a long run every read appears its exact share (two
+  // reads: half the visits each) instead of relying on luck. Private reads are
+  // never counted and never drawn.
   app.get('/api/feed', guard, async (c) => {
-    const rows = await c
-      .get('db')
+    const db = c.get('db')
+    const rows = await db
       .prepare(
-        `SELECT ${COLUMNS} FROM items WHERE visibility = 'public' ORDER BY created_at DESC LIMIT 200`,
+        `SELECT ${COLUMNS} FROM items WHERE visibility = 'public' LIMIT 500`,
       )
       .all<ItemRow>()
-    const total = rows.results.length
+    const pool = [...rows.results]
+    const total = pool.length
     const chance = total ? 1 / total : 0
-    const picked = rows.results.filter(() => random() < chance)
-    // Never leave Home empty while public reads exist.
-    if (total && !picked.length)
-      picked.push(rows.results[Math.min(total - 1, Math.floor(random() * total))]!)
-    for (let i = picked.length - 1; i > 0; i -= 1) {
+    // How many reads this visit shows: the chance applied to the shelf, so the
+    // long-run average matches the percentage shown on screen.
+    const slots = total ? Math.max(1, Math.round(total * chance)) : 0
+
+    // Shuffle first, then a stable sort by fewest appearances: ties rotate.
+    for (let i = pool.length - 1; i > 0; i -= 1) {
       const j = Math.floor(random() * (i + 1))
-      ;[picked[i], picked[j]] = [picked[j]!, picked[i]!]
+      ;[pool[i], pool[j]] = [pool[j]!, pool[i]!]
     }
+    pool.sort((a, b) => a.shown - b.shown)
+    const picked = pool.slice(0, slots)
+
+    if (picked.length) {
+      const placeholders = picked.map(() => '?').join(', ')
+      await db
+        .prepare(`UPDATE items SET shown = shown + 1 WHERE id IN (${placeholders})`)
+        .bind(...picked.map((row) => row.id))
+        .run()
+    }
+
     return c.json({
-      items: picked.slice(0, 60).map((row) => mapItem(row)),
+      items: picked.map((row) => mapItem(row)),
       chance,
       total,
     })
@@ -245,6 +260,7 @@ export function createApp(random: () => number = Math.random) {
         // `reach` predates plain public sharing; the column is kept at 0.
         reach: 0,
         opens: 0,
+        shown: 0,
         created_at: now,
         updated_at: now,
       }

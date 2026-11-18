@@ -5,9 +5,11 @@ app works with one shelf.
 
 - **Private** — kept off the Home feed and the ranking, but still on your shelf
   and openable from there.
-- **Public** — enters the Home draw. Each public read has a 1-in-total
-  chance of appearing on a visit (two reads: 50% each), so Home varies and
-  never shows an empty page while public reads exist.
+- **Public** — enters the Home draw. Each public read's chance is 1 in the
+  total number of public reads, and the count of times it has already been
+  drawn (`items.shown` in D1) means the least-shown goes first. Ten visits with
+  two public reads show each one five times, so the percentage on screen is a
+  long-run guarantee rather than a per-visit coin toss.
 - **Most opened** — an all-time ranking of public reads by how many times they
   have been opened; private reads are neither counted nor listed there.
 - **Covers** — a separate cover image can be uploaded with a document, and

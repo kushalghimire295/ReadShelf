@@ -15,6 +15,7 @@ const table = [
     visibility TEXT NOT NULL,
     reach INTEGER NOT NULL DEFAULT 0,
     opens INTEGER NOT NULL DEFAULT 0,
+    shown INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`,
@@ -30,6 +31,7 @@ const indexes = [
 /** Columns added after the first release; each runs once and is then a no-op. */
 const additions = [
   `ALTER TABLE items ADD COLUMN opens INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE items ADD COLUMN shown INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE items ADD COLUMN cover_key TEXT`,
   `ALTER TABLE items ADD COLUMN cover_mime TEXT`,
 ]
@@ -69,6 +71,8 @@ export type ItemRow = {
   /** Legacy column, no longer used by the API or the interface. */
   reach: number
   opens: number
+  /** Times this read has been drawn onto Home; keeps the draw fair over time. */
+  shown: number
   created_at: number
   updated_at: number
 }

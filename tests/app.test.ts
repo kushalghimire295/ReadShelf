@@ -154,37 +154,47 @@ test('public uploads appear on the Home feed and the shelf', async () => {
   )
 })
 
-test('each public read has a one-in-total chance of appearing on Home', async () => {
+test('the percentage holds over a long run and every read gets its turn', async () => {
   await reset()
   await upload({ title: 'One' })
   await upload({ title: 'Two' })
+  const draw = createApp(() => 0.5)
 
-  const all = (await (await call('/api/feed')).json()) as {
+  const first = (await (
+    await draw.request(`${ORIGIN}/api/feed`, {}, env)
+  ).json()) as {
     items: { title: string }[]
     chance: number
     total: number
   }
-  // Two public reads means each has a 50% chance on any given visit.
-  expect(all.total).toBe(2)
-  expect(all.chance).toBe(0.5)
-  expect(all.items).toHaveLength(2)
+  // Two public reads means each has a 50% chance, so one of them shows.
+  expect(first).toMatchObject({ total: 2, chance: 0.5 })
+  expect(first.items).toHaveLength(1)
 
-  // A draw that misses every read still shows one, so Home is never blank.
-  const strict = createApp(() => 0.999)
-  const drawn = (await (
-    await strict.request(`${ORIGIN}/api/feed`, {}, env)
-  ).json()) as { items: { title: string }[]; chance: number }
-  expect(drawn.chance).toBe(0.5)
-  expect(drawn.items).toHaveLength(1)
-
-  // Private reads are in neither the draw nor the total.
-  await upload({ title: 'Hidden', visibility: 'private' })
-  const again = (await (await call('/api/feed')).json()) as {
-    total: number
-    chance: number
+  await reset()
+  const titles = ['A', 'B', 'C', 'D']
+  for (const title of titles) await upload({ title })
+  const counts = new Map<string, number>()
+  for (let visit = 0; visit < 40; visit += 1) {
+    const body = (await (
+      await draw.request(`${ORIGIN}/api/feed`, {}, env)
+    ).json()) as { items: { title: string }[]; chance: number }
+    expect(body.chance).toBe(0.25)
+    expect(body.items).toHaveLength(1)
+    const title = body.items[0]!.title
+    counts.set(title, (counts.get(title) ?? 0) + 1)
   }
-  expect(again).toMatchObject({ total: 2, chance: 0.5 })
-  expect(await list('/api/items')).toHaveLength(3)
+  // Forty visits at 25% each is ten appearances per read: the printed
+  // percentage is a long-run promise, not a per-visit coin toss.
+  for (const title of titles) expect(counts.get(title)).toBe(10)
+
+  // Private reads change neither the total nor the draw.
+  await upload({ title: 'Hidden', visibility: 'private' })
+  const after = (await (
+    await draw.request(`${ORIGIN}/api/feed`, {}, env)
+  ).json()) as { total: number; chance: number }
+  expect(after).toMatchObject({ total: 4, chance: 0.25 })
+  expect(await list('/api/items')).toHaveLength(5)
 })
 
 test('private uploads stay off the feed but remain readable', async () => {
